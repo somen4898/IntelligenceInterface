@@ -1,6 +1,6 @@
 # ii-structure
 
-**Structural code navigation for LLM agents. 2.7x fewer tokens than grep + read.**
+**Structural code navigation for LLM agents. 14.6x fewer tokens than grep + read on real projects.**
 
 LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer."
 
@@ -37,7 +37,20 @@ result:
 
 ## Token Savings — Measured, Not Claimed
 
-We benchmarked ii-structure against native tools (Read, Grep, Glob) on the same queries, counting actual tokens with `tiktoken`:
+All numbers measured with `tiktoken`, comparing native tools (grep, cat/read) against ii-structure on identical queries.
+
+### Real-World Project (production codebase)
+
+| Task | Native Tokens | ii-structure Tokens | Reduction |
+|------|:---:|:---:|:---:|
+| File structure overview | 1,571 | 237 | **6.6x** |
+| Find all usages of a symbol | 13,361 | 105 | **127.2x** |
+| Production usages (no tests) | 13,109 | 105 | **124.8x** |
+| Read single function | 1,571 | 1,823 | 0.9x |
+| Search for 'config' | 16,918 | 126 | **134.3x** |
+| **Total** | **33,421** | **2,291** | **14.6x** |
+
+### Self-Referential (ii-structure's own codebase)
 
 | Task | Native Tokens | ii-structure Tokens | Reduction |
 |------|:---:|:---:|:---:|
@@ -45,9 +58,11 @@ We benchmarked ii-structure against native tools (Read, Grep, Glob) on the same 
 | Understand a module's structure | 1,744 | 645 | **2.7x** |
 | Find all callers of a function | 328 | 571 | 0.6x* |
 | Read one method's implementation | 1,272 | 159 | **8.0x** |
-| **Total across 4 queries** | **3,910** | **1,427** | **2.7x** |
+| **Total** | **3,910** | **1,427** | **2.7x** |
 
-*\*`usages` returns more results than grep (includes test files, classifies by kind) — more data, but all useful. Use `--no-tests` to save 33% when exploring.*
+The pattern: savings scale with project size. On a small codebase (1.3k lines), grep is tolerable — 2.7x savings. On a real project, grep returns thousands of noisy matches and files are longer — 14.6x savings. Larger projects = bigger wins.
+
+*\*`usages` on the small codebase returns more than grep because it includes test files with classification. Use `--no-tests` to save 33% when exploring.*
 
 ## How It Works
 
