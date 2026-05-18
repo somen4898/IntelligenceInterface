@@ -13,20 +13,23 @@ overview: |
 workflow: |
   RECOMMENDED WORKFLOW:
 
-  1. Orient: Run 'files' to see what's in the project
-  2. Explore: Run 'outline <file>' to see a file's skeleton without reading it
+  1. Map: Run 'files --summary' to get a project map (files + top-level symbols)
+  2. Explore: Run 'outline <file>' to see a file's full skeleton
   3. Find: Run 'locate <name>' to find where something is defined
-  4. Understand: Run 'body <name>' to read just the symbol you need
+  4. Read: Run 'body <name>' to read just the symbol you need
   5. Trace: Run 'usages <name>' to find all callers/references (type-resolved)
-  6. Dependencies: Run 'imports <file>' to see what a file depends on
+  6. Deps: Run 'imports <file>' to see what a file depends on
 
   QUICK PATTERNS:
 
+  "I'm new to this project, what's here?"
+    → ii-structure files --summary
+
+  "I know the file, what's inside?"
+    → ii-structure outline <file> --depth full
+
   "Where is X defined?"
     → ii-structure locate X
-
-  "What does file Y look like?"
-    → ii-structure outline Y --depth full
 
   "Who calls X.method()?"
     → ii-structure usages X/method
@@ -40,30 +43,45 @@ workflow: |
   "I'm looking for something related to authentication"
     → ii-structure search auth
 
-  WHEN TO USE GREP INSTEAD:
-  - Searching for a string literal in code
-  - Searching for a comment or TODO
-  - Regex patterns across file contents
-  ii-structure searches structure, not text.
+  WHEN TO USE YOUR NATIVE TOOLS INSTEAD:
+  - Glob: when you know the filename pattern you're looking for
+  - Grep: when searching for string literals, comments, TODOs, regex patterns
+  - Read: when you need the full file or a specific line range
+  ii-structure searches structure, not text. Use each tool for what it's best at.
 
 commands:
   files:
-    description: "List all indexed Python files in the project."
-    when_to_use: "First step to orient yourself. See project scope and structure. Very cheap."
-    when_not_to_use: "When you already know which file you need."
+    description: "List indexed files, or get a project map with --summary."
+    when_to_use: |
+      YOUR FIRST COMMAND on any new project. Use 'files --summary' to get a project map
+      showing every file with its top-level classes and functions. This is like reading
+      outlines of every file at once, but 8x cheaper in tokens.
+      Use plain 'files' (no --summary) only when you need just the file list.
+    when_not_to_use: |
+      When you know the filename pattern — use your native Glob tool instead.
+      When you need a specific file's full skeleton — use 'outline' instead.
     cost: fast
-    usage: "ii-structure files [--glob PATTERN] [--path PREFIX]"
+    usage: "ii-structure files [--glob PATTERN] [--path PREFIX] [--summary]"
     tips: |
-      --glob uses shell patterns: '*model*', 'src/**/*.py', 'test_*.py'
-      --path filters by prefix: 'src/api/' returns only files under that directory
+      --summary: returns files + top-level symbol signatures. This is the project map.
+        Use this first on any unfamiliar project. One command, full orientation.
+      --glob: shell patterns like '*model*', 'test_*.py'
+      --path: prefix filter like 'src/api/'
+      Combine: 'files --summary --path src/' maps only source files, skipping tests.
     example:
-      input: "ii-structure files --glob '*model*'"
+      input: "ii-structure files --summary --path src/"
       output: |
         ok: true
         command: files
         result:
-          - models/user.py
-          - models/product.py
+          - file: src/models/user.py
+            symbols:
+              - "class User(BaseModel)"
+              - "class UserCreate(BaseModel)"
+          - file: src/api/routes.py
+            symbols:
+              - "def create_user(request: Request) -> User"
+              - "def get_user(user_id: int) -> User"
 
   outline:
     description: "File skeleton: classes, functions, signatures, docstrings. No function bodies."

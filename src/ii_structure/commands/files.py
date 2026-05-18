@@ -6,7 +6,8 @@ def execute(
     idx: Index,
     glob_pattern: str | None = None,
     path_prefix: str | None = None,
-) -> list[str]:
+    summary: bool = False,
+) -> list:
     files = sorted(idx.files.keys())
 
     if path_prefix:
@@ -15,4 +16,20 @@ def execute(
     if glob_pattern:
         files = [f for f in files if fnmatch.fnmatch(f, glob_pattern)]
 
-    return files
+    if not summary:
+        return files
+
+    result = []
+    for f in files:
+        file_data = idx.files[f]
+        # Top-level symbols only (no methods — those are discoverable via outline)
+        top_symbols = [
+            s for s in file_data["symbols"]
+            if s.get("parent") is None
+        ]
+        signatures = [s["signature"] for s in top_symbols]
+
+        entry = {"file": f, "symbols": signatures}
+        result.append(entry)
+
+    return result

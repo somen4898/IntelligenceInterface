@@ -41,13 +41,14 @@ def _get_index(ctx) -> Index:
 @cli.command()
 @click.option("--glob", "glob_pattern", default=None, help="Filter by glob pattern")
 @click.option("--path", "path_prefix", default=None, help="Filter by path prefix")
+@click.option("--summary", is_flag=True, default=False, help="Include top-level symbol signatures per file")
 @click.pass_context
-def files(ctx, glob_pattern, path_prefix):
+def files(ctx, glob_pattern, path_prefix, summary):
     """List all indexed Python files."""
     try:
         idx = _get_index(ctx)
         from ii_structure.commands.files import execute
-        results = execute(idx, glob_pattern=glob_pattern, path_prefix=path_prefix)
+        results = execute(idx, glob_pattern=glob_pattern, path_prefix=path_prefix, summary=summary)
         click.echo(format_success("files", results))
     except Exception as e:
         click.echo(format_error("files", str(e)))
