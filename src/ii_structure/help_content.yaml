@@ -1,0 +1,255 @@
+overview: |
+  ii-structure gives you structural code navigation for Python projects.
+  Instead of grepping text and reading whole files, ask structural questions
+  and get compact YAML answers.
+
+  WHY USE THIS: outline + locate + body costs ~200 tokens to understand a symbol.
+  Reading the file costs ~2000 tokens. usages gives you type-resolved references
+  that grep cannot — it distinguishes User.save() from Product.save().
+
+  FIRST RUN: The first invocation builds an index (~2s for a 50k-line project).
+  Subsequent runs are instant (<300ms). The index auto-updates when files change.
+
+workflow: |
+  RECOMMENDED WORKFLOW:
+
+  1. Orient: Run 'files' to see what's in the project
+  2. Explore: Run 'outline <file>' to see a file's skeleton without reading it
+  3. Find: Run 'locate <name>' to find where something is defined
+  4. Understand: Run 'body <name>' to read just the symbol you need
+  5. Trace: Run 'usages <name>' to find all callers/references (type-resolved)
+  6. Dependencies: Run 'imports <file>' to see what a file depends on
+
+  QUICK PATTERNS:
+
+  "Where is X defined?"
+    → ii-structure locate X
+
+  "What does file Y look like?"
+    → ii-structure outline Y --depth full
+
+  "Who calls X.method()?"
+    → ii-structure usages X/method
+
+  "I need to read the implementation of X"
+    → ii-structure body X
+
+  "What would break if I change file Y?"
+    → ii-structure imports Y  (check imported_by)
+
+  "I'm looking for something related to authentication"
+    → ii-structure search auth
+
+  WHEN TO USE GREP INSTEAD:
+  - Searching for a string literal in code
+  - Searching for a comment or TODO
+  - Regex patterns across file contents
+  ii-structure searches structure, not text.
+
+commands:
+  files:
+    description: "List all indexed Python files in the project."
+    when_to_use: "First step to orient yourself. See project scope and structure. Very cheap."
+    when_not_to_use: "When you already know which file you need."
+    cost: fast
+    usage: "ii-structure files [--glob PATTERN] [--path PREFIX]"
+    tips: |
+      --glob uses shell patterns: '*model*', 'src/**/*.py', 'test_*.py'
+      --path filters by prefix: 'src/api/' returns only files under that directory
+    example:
+      input: "ii-structure files --glob '*model*'"
+      output: |
+        ok: true
+        command: files
+        result:
+          - models/user.py
+          - models/product.py
+
+  outline:
+    description: "File skeleton: classes, functions, signatures, docstrings. No function bodies."
+    when_to_use: |
+      Your FIRST move when exploring a file. Returns the complete structure in ~100 tokens
+      instead of ~2000 tokens for reading the whole file. Shows you what's there so you can
+      decide what to read in detail with 'body'.
+    when_not_to_use: "When you need the actual implementation code. Use 'body <symbol>' for that."
+    cost: fast
+    usage: "ii-structure outline <file> [--depth top|full] [--kind class|function|method|variable]"
+    tips: |
+      --depth top (default): top-level symbols only — classes, module functions, constants
+      --depth full: includes methods inside classes, nested functions
+      --kind class: show only classes (useful for large files)
+      The output includes imports, so you can see dependencies too.
+    example:
+      input: "ii-structure outline src/models/user.py --depth full"
+      output: |
+        ok: true
+        command: outline
+        result:
+          file: src/models/user.py
+          symbols:
+            - name: User
+              kind: class
+              line: 10
+              signature: "class User(BaseModel)"
+              docstring: "Core user entity"
+              children: [__init__, save, delete, to_dict]
+            - name: save
+              kind: method
+              line: 25
+              signature: "def save(self) -> bool"
+              docstring: "Persist to database"
+          imports:
+            - module: sqlalchemy
+              names: [Column, String]
+
+  locate:
+    description: "Find where a symbol is defined. Returns file, line, kind, signature."
+    when_to_use: |
+      When you know the name but not the file. Faster than grepping because it searches
+      the structural index, not file contents. Supports hierarchical name paths.
+    when_not_to_use: "When you need usage sites (where it's called). Use 'usages' instead."
+    cost: fast
+    usage: "ii-structure locate <name> [--kind class|function|method|variable] [--file FILE] [--match exact|substring]"
+    tips: |
+      Name paths: 'User/save' finds method save inside class User
+      Anchored: '/User' finds only top-level User (not nested)
+      Substring: --match substring finds partial matches ('auth' matches 'authenticate')
+      Kind filter: --kind method finds only methods, not classes or functions
+      Multiple results: if 'save' exists in User and Product, both are returned
+    example:
+      input: "ii-structure locate User/save"
+      output: |
+        ok: true
+        command: locate
+        result:
+          - file: src/models/user.py
+            line: 25
+            kind: method
+            name: save
+            signature: "def save(self) -> bool"
+            docstring: "Persist to database"
+            parent: User
+
+  usages:
+    description: "Find all references to a symbol, resolved by type. Powered by Jedi."
+    when_to_use: |
+      When you need to know everywhere a symbol is used — callers, imports, assignments.
+      This is TYPE-RESOLVED: 'usages User/save' finds only calls to User.save(),
+      not Product.save() or dict.save(). This is the key advantage over grep.
+    when_not_to_use: |
+      For simple text search — use grep.
+      For finding definitions — use locate (faster, no Jedi overhead).
+    cost: moderate
+    usage: "ii-structure usages <name> [--path SCOPE] [--kind call|import|reference|definition] [--limit N]"
+    tips: |
+      First run on a project may take 2-5s (Jedi builds its cache). Subsequent runs: <1s.
+      --path restricts to a directory: --path src/api/ searches only that subtree
+      --limit defaults to 50. If you hit the limit, narrow with --path or --kind.
+      Each result includes one line of context so you can scan without reading files.
+    example:
+      input: "ii-structure usages User/save --limit 10"
+      output: |
+        ok: true
+        command: usages
+        result:
+          - file: src/services/user_service.py
+            line: 23
+            kind: reference
+            context: "user.save()"
+          - file: src/api/routes.py
+            line: 45
+            kind: reference
+            context: "new_user.save()"
+          - file: src/models/user.py
+            line: 25
+            kind: definition
+            context: "def save(self) -> bool:"
+
+  body:
+    description: "Get the full source code of one symbol."
+    when_to_use: |
+      After 'outline' showed you a symbol exists and you need to read its implementation.
+      Returns just that symbol's code — not the whole file. Saves significant tokens on
+      large files where you only need one function.
+    when_not_to_use: "When you need the whole file. Use your Read tool for that."
+    cost: fast
+    usage: "ii-structure body <name> [--file FILE]"
+    tips: |
+      Name paths work: 'body User/save' gets just the save method
+      --file disambiguates: if 'save' exists in multiple classes, --file models.py picks one
+      For a class, returns the ENTIRE class including all methods.
+    example:
+      input: "ii-structure body User/save"
+      output: |
+        ok: true
+        command: body
+        result:
+          file: src/models/user.py
+          line: 25
+          name: save
+          kind: method
+          source: |
+            def save(self) -> bool:
+                """Persist to database."""
+                self.updated_at = datetime.now()
+                db.session.add(self)
+                db.session.commit()
+                return True
+
+  imports:
+    description: "What a file imports and what imports it."
+    when_to_use: |
+      Before modifying a file — check imported_by to understand blast radius.
+      When understanding architecture — see how modules connect.
+    when_not_to_use: "For finding symbol definitions. Use 'locate' instead."
+    cost: fast
+    usage: "ii-structure imports <file> [--depth N] [--include-external]"
+    tips: |
+      --depth 1 (default): direct imports only
+      --depth 2: imports of imports — shows the neighborhood
+      Third-party packages excluded by default. --include-external adds them.
+      imported_by is the reverse: files that depend on THIS file.
+    example:
+      input: "ii-structure imports src/services/user_service.py"
+      output: |
+        ok: true
+        command: imports
+        result:
+          file: src/services/user_service.py
+          imports:
+            - module: models.user
+              file: src/models/user.py
+              names: [User]
+          imported_by:
+            - file: src/api/routes.py
+              module: services.user_service
+              names: [create_user, delete_user]
+
+  search:
+    description: "Ranked search over symbol names and docstrings."
+    when_to_use: |
+      When you don't know the exact name. 'search auth' finds authenticate_user,
+      AuthService, login, etc. Searches structural metadata, not file contents —
+      so it's precise and won't match string literals or comments.
+    when_not_to_use: "For text search in code bodies or comments. Use grep."
+    cost: fast
+    usage: "ii-structure search <query> [--limit N]"
+    tips: |
+      Ranking: exact name > prefix > substring > docstring match
+      Case-insensitive. 'search user' matches User, get_user, UserService.
+      Default limit is 20. Increase with --limit for broad searches.
+    example:
+      input: "ii-structure search authenticate"
+      output: |
+        ok: true
+        command: search
+        result:
+          - file: src/auth/service.py
+            name: authenticate_user
+            kind: function
+            line: 15
+            signature: "def authenticate_user(token: str) -> User"
+          - file: src/auth/middleware.py
+            name: AuthenticationMiddleware
+            kind: class
+            line: 8

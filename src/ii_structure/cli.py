@@ -161,6 +161,25 @@ def search(ctx, query, limit):
         sys.exit(1)
 
 
+@cli.command(name="help")
+@click.argument("command", required=False, default=None)
+@click.pass_context
+def help_cmd(ctx, command):
+    """Show command documentation for agents."""
+    try:
+        from ii_structure.commands.help import execute
+        result = execute(command=command)
+        if result is None:
+            click.echo(format_error("help", f"Unknown command: {command}",
+                       suggestion="Run 'ii-structure help' for the full command list."))
+            sys.exit(1)
+        else:
+            click.echo(format_success("help", result))
+    except Exception as e:
+        click.echo(format_error("help", str(e)))
+        sys.exit(1)
+
+
 @cli.command(name="imports")
 @click.argument("file")
 @click.option("--depth", type=int, default=1, help="Hop distance")
