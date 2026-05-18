@@ -1,0 +1,8 @@
+id: modify-1
+archetype: modify
+description: "Find all usages of format_success to understand impact of changing its signature"
+commands:
+  - "usages format_success"
+rubric:
+  type: min-count
+  min_results: 3

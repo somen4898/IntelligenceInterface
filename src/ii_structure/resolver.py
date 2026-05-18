@@ -7,6 +7,20 @@ except ImportError:
     jedi = None
 
 
+TEST_PATTERNS = {"test_", "tests/", "test/", "_test.py", "conftest.py"}
+
+
+def _is_test_file(path: str) -> bool:
+    parts = path.split("/")
+    filename = parts[-1]
+    return (
+        filename.startswith("test_")
+        or filename.endswith("_test.py")
+        or filename == "conftest.py"
+        or any(p in ("tests", "test") for p in parts[:-1])
+    )
+
+
 def find_usages(
     project_root: str,
     name: str,
@@ -14,6 +28,7 @@ def find_usages(
     path_scope: str | None = None,
     kind_filter: str | None = None,
     limit: int = 50,
+    include_tests: bool = True,
 ) -> list[dict]:
     if jedi is None:
         return []
@@ -56,6 +71,9 @@ def find_usages(
                 continue  # outside project
 
             if path_scope and not rel.startswith(path_scope):
+                continue
+
+            if not include_tests and _is_test_file(rel):
                 continue
 
             key = (rel, ref.line)

@@ -1,0 +1,11 @@
+id: find-known-2
+archetype: find-known
+description: "Find the parse_file function"
+commands:
+  - "locate parse_file --kind function"
+rubric:
+  type: exact-match
+  expected:
+    name: parse_file
+    file: src/ii_structure/parser.py
+    kind: function

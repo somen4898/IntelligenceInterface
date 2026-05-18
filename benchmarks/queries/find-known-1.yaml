@@ -1,0 +1,11 @@
+id: find-known-1
+archetype: find-known
+description: "Find the Index class definition"
+commands:
+  - "locate Index --kind class"
+rubric:
+  type: exact-match
+  expected:
+    name: Index
+    file: src/ii_structure/index.py
+    kind: class

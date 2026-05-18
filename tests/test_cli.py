@@ -137,3 +137,45 @@ def test_body_with_file(project_with_root):
     parsed = yaml.safe_load(result.stdout)
     assert parsed["ok"] is True
     assert parsed["result"]["file"] == "models.py"
+
+
+def test_files_command(project_with_root):
+    result = run_cli("files", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "files"
+    assert len(parsed["result"]) >= 1
+
+
+def test_search_command(project_with_root):
+    result = run_cli("search", "User", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "search"
+    assert len(parsed["result"]) >= 1
+
+
+def test_help_command(project_with_root):
+    result = run_cli("help", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert "commands" in parsed["result"]
+    assert "workflow" in parsed["result"]
+
+
+def test_help_single_command_cli(project_with_root):
+    result = run_cli("help", "outline", cwd=project_with_root)
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["result"]["command"] == "outline"
+
+
+def test_imports_command(project_with_root):
+    result = run_cli("imports", "views.py", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "imports"

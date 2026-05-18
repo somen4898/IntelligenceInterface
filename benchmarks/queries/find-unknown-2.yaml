@@ -1,0 +1,10 @@
+id: find-unknown-2
+archetype: find-unknown
+description: "Find everything related to gitignore handling"
+commands:
+  - "search gitignore"
+rubric:
+  type: must-contain-any
+  expected_items:
+    - "_load_gitignore"
+    - "gitignore"

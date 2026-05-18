@@ -1,0 +1,11 @@
+id: understand-2
+archetype: understand
+description: "What are all the files in the project?"
+commands:
+  - "files --path src/"
+rubric:
+  type: must-contain
+  expected_items:
+    - "src/ii_structure/parser.py"
+    - "src/ii_structure/index.py"
+    - "src/ii_structure/cli.py"

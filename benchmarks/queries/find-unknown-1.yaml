@@ -1,0 +1,10 @@
+id: find-unknown-1
+archetype: find-unknown
+description: "Find something related to YAML output formatting"
+commands:
+  - "search format"
+rubric:
+  type: must-contain
+  expected_items:
+    - "format_success"
+    - "format_error"
