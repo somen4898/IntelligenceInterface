@@ -10,3 +10,8 @@ def fixtures_dir():
 @pytest.fixture
 def simple_project(fixtures_dir):
     return fixtures_dir / "simple_project"
+
+
+@pytest.fixture
+def jedi_project(fixtures_dir):
+    return fixtures_dir / "jedi_project"
