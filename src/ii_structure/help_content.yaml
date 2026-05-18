@@ -140,12 +140,14 @@ commands:
       For simple text search — use grep.
       For finding definitions — use locate (faster, no Jedi overhead).
     cost: moderate
-    usage: "ii-structure usages <name> [--path SCOPE] [--kind call|import|reference|definition] [--limit N]"
+    usage: "ii-structure usages <name> [--path SCOPE] [--kind call|import|reference|definition] [--limit N] [--no-tests]"
     tips: |
       First run on a project may take 2-5s (Jedi builds its cache). Subsequent runs: <1s.
       --path restricts to a directory: --path src/api/ searches only that subtree
       --limit defaults to 50. If you hit the limit, narrow with --path or --kind.
       Each result includes one line of context so you can scan without reading files.
+      --no-tests excludes test files (test_*, *_test.py, conftest.py, tests/ dirs).
+      Use --no-tests when exploring an API. OMIT it when refactoring — you need all call sites.
     example:
       input: "ii-structure usages User/save --limit 10"
       output: |

@@ -9,6 +9,7 @@ def execute(
     path_scope: str | None = None,
     kind_filter: str | None = None,
     limit: int = 50,
+    include_tests: bool = True,
 ) -> list[dict]:
     return find_usages(
         project_root=project_root,
@@ -17,4 +18,5 @@ def execute(
         path_scope=path_scope,
         kind_filter=kind_filter,
         limit=limit,
+        include_tests=include_tests,
     )

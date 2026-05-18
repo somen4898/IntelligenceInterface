@@ -97,8 +97,9 @@ def locate(ctx, name, kind, file, match):
 @click.option("--path", "path_scope", default=None, help="Restrict to directory subtree")
 @click.option("--kind", type=click.Choice(["call", "import", "assignment", "reference", "definition"]), default=None)
 @click.option("--limit", type=int, default=50, help="Max results")
+@click.option("--no-tests", is_flag=True, default=False, help="Exclude test files from results")
 @click.pass_context
-def usages(ctx, name, path_scope, kind, limit):
+def usages(ctx, name, path_scope, kind, limit, no_tests):
     """Find all references to a symbol, resolved by type."""
     try:
         idx = _get_index(ctx)
@@ -110,6 +111,7 @@ def usages(ctx, name, path_scope, kind, limit):
             path_scope=path_scope,
             kind_filter=kind,
             limit=limit,
+            include_tests=not no_tests,
         )
         total = len(results)
         if total >= limit:
