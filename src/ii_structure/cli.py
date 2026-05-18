@@ -161,6 +161,26 @@ def search(ctx, query, limit):
         sys.exit(1)
 
 
+@cli.command(name="imports")
+@click.argument("file")
+@click.option("--depth", type=int, default=1, help="Hop distance")
+@click.option("--include-external", is_flag=True, default=False, help="Include third-party packages")
+@click.pass_context
+def imports_cmd(ctx, file, depth, include_external):
+    """What a file imports and what imports it."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.imports import execute
+        result = execute(idx, file=file, depth=depth, include_external=include_external)
+        click.echo(format_success("imports", result))
+    except FileNotFoundError as e:
+        click.echo(format_error("imports", str(e)))
+        sys.exit(1)
+    except Exception as e:
+        click.echo(format_error("imports", str(e)))
+        sys.exit(1)
+
+
 def main():
     cli()
 

@@ -155,3 +155,11 @@ def test_search_command(project_with_root):
     assert parsed["ok"] is True
     assert parsed["command"] == "search"
     assert len(parsed["result"]) >= 1
+
+
+def test_imports_command(project_with_root):
+    result = run_cli("imports", "views.py", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "imports"
