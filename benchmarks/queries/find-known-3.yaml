@@ -1,0 +1,10 @@
+id: find-known-3
+archetype: find-known
+description: "Find the save method inside the class it belongs to"
+commands:
+  - "locate User/save"
+rubric:
+  type: exact-match
+  expected:
+    name: save
+    kind: method

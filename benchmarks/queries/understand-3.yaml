@@ -1,0 +1,11 @@
+id: understand-3
+archetype: understand
+description: "What does cli.py depend on?"
+commands:
+  - "imports src/ii_structure/cli.py --include-external"
+rubric:
+  type: must-contain
+  expected_items:
+    - "ii_structure.root"
+    - "ii_structure.index"
+    - "ii_structure.output"

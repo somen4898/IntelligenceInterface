@@ -22,3 +22,6 @@ dev = [
 
 [project.scripts]
 ii-structure = "ii_structure.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

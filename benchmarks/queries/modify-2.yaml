@@ -1,0 +1,11 @@
+id: modify-2
+archetype: modify
+description: "Get the full implementation of the Index.build method"
+commands:
+  - "body Index/build"
+rubric:
+  type: must-contain
+  expected_items:
+    - "def build"
+    - "gitignore"
+    - "return cls"

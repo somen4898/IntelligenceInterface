@@ -1,0 +1,12 @@
+id: understand-1
+archetype: understand
+description: "What does the parser module contain?"
+commands:
+  - "outline src/ii_structure/parser.py --depth full"
+rubric:
+  type: must-contain
+  expected_items:
+    - "SymbolInfo"
+    - "ImportInfo"
+    - "ParseResult"
+    - "parse_file"
