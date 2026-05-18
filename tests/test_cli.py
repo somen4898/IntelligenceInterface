@@ -100,3 +100,40 @@ def test_no_cache_flag(project_with_root):
     result = run_cli("--no-cache", "locate", "User", cwd=project_with_root)
     parsed = yaml.safe_load(result.stdout)
     assert parsed["ok"] is True
+
+
+def test_usages_command(project_with_root):
+    result = run_cli("usages", "User", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "usages"
+
+
+def test_usages_with_limit(project_with_root):
+    result = run_cli("usages", "User", "--limit", "1", cwd=project_with_root)
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert len(parsed["result"]) <= 1
+
+
+def test_body_command(project_with_root):
+    result = run_cli("body", "User", cwd=project_with_root)
+    assert result.returncode == 0
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["command"] == "body"
+    assert "source" in parsed["result"]
+
+
+def test_body_not_found_cli(project_with_root):
+    result = run_cli("body", "NonExistent", cwd=project_with_root)
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is False
+
+
+def test_body_with_file(project_with_root):
+    result = run_cli("body", "save", "--file", "models.py", cwd=project_with_root)
+    parsed = yaml.safe_load(result.stdout)
+    assert parsed["ok"] is True
+    assert parsed["result"]["file"] == "models.py"

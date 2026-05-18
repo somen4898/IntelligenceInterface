@@ -74,6 +74,61 @@ def locate(ctx, name, kind, file, match):
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("name")
+@click.option("--path", "path_scope", default=None, help="Restrict to directory subtree")
+@click.option("--kind", type=click.Choice(["call", "import", "assignment", "reference", "definition"]), default=None)
+@click.option("--limit", type=int, default=50, help="Max results")
+@click.pass_context
+def usages(ctx, name, path_scope, kind, limit):
+    """Find all references to a symbol, resolved by type."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.usages import execute
+        results = execute(
+            idx=idx,
+            project_root=str(ctx.obj["root"]),
+            name=name,
+            path_scope=path_scope,
+            kind_filter=kind,
+            limit=limit,
+        )
+        total = len(results)
+        if total >= limit:
+            click.echo(format_success("usages", results, total=total, limit=limit))
+        else:
+            click.echo(format_success("usages", results))
+    except Exception as e:
+        click.echo(format_error("usages", str(e)))
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--file", "file_hint", default=None, help="Disambiguate by file")
+@click.pass_context
+def body(ctx, name, file_hint):
+    """Get the full source body of a symbol."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.body import execute
+        result = execute(
+            idx=idx,
+            project_root=str(ctx.obj["root"]),
+            name=name,
+            file_hint=file_hint,
+        )
+        if result is None:
+            click.echo(format_error("body", f"Symbol '{name}' not found",
+                       suggestion=f"Try: ii-structure locate {name}"))
+            sys.exit(1)
+        else:
+            click.echo(format_success("body", result))
+    except Exception as e:
+        click.echo(format_error("body", str(e)))
+        sys.exit(1)
+
+
 def main():
     cli()
 
