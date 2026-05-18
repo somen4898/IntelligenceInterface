@@ -37,6 +37,22 @@ def _get_index(ctx) -> Index:
 
 
 @cli.command()
+@click.option("--glob", "glob_pattern", default=None, help="Filter by glob pattern")
+@click.option("--path", "path_prefix", default=None, help="Filter by path prefix")
+@click.pass_context
+def files(ctx, glob_pattern, path_prefix):
+    """List all indexed Python files."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.files import execute
+        results = execute(idx, glob_pattern=glob_pattern, path_prefix=path_prefix)
+        click.echo(format_success("files", results))
+    except Exception as e:
+        click.echo(format_error("files", str(e)))
+        sys.exit(1)
+
+
+@cli.command()
 @click.argument("file")
 @click.option("--depth", type=click.Choice(["top", "full"]), default="top")
 @click.option("--kind", type=click.Choice(["class", "function", "method", "variable", "import"]), default=None)
@@ -126,6 +142,22 @@ def body(ctx, name, file_hint):
             click.echo(format_success("body", result))
     except Exception as e:
         click.echo(format_error("body", str(e)))
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--limit", type=int, default=20, help="Max results")
+@click.pass_context
+def search(ctx, query, limit):
+    """Search symbol names and docstrings."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.search import execute
+        results = execute(idx, query=query, limit=limit)
+        click.echo(format_success("search", results))
+    except Exception as e:
+        click.echo(format_error("search", str(e)))
         sys.exit(1)
 
 
