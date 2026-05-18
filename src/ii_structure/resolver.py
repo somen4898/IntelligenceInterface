@@ -37,8 +37,11 @@ def find_usages(
         source = file_path.read_text(encoding="utf-8", errors="replace")
         script = jedi.Script(source, path=str(file_path), project=project)
 
+        # Calculate column offset to land on the symbol name
+        column = _find_name_column(source, candidate["line"], candidate["name"])
+
         try:
-            refs = script.get_references(line=candidate["line"], column=0)
+            refs = script.get_references(line=candidate["line"], column=column)
         except Exception:
             continue
 
@@ -157,6 +160,17 @@ def _read_symbol_source(root: pathlib.Path, candidate: dict) -> dict:
         "kind": candidate["kind"],
         "source": body,
     }
+
+
+def _find_name_column(source: str, line: int, name: str) -> int:
+    """Find the column offset of a symbol name on a given line."""
+    lines = source.splitlines()
+    if 0 < line <= len(lines):
+        line_text = lines[line - 1]
+        idx = line_text.find(name)
+        if idx >= 0:
+            return idx
+    return 0
 
 
 def _classify_reference(ref) -> str:
