@@ -179,3 +179,31 @@ def test_imports_command(project_with_root):
     parsed = yaml.safe_load(result.stdout)
     assert parsed["ok"] is True
     assert parsed["command"] == "imports"
+
+
+def test_init_creates_claude_md(project_with_root):
+    result = run_cli("init", cwd=project_with_root)
+    assert result.returncode == 0
+    claude_md = project_with_root / "CLAUDE.md"
+    assert claude_md.exists()
+    content = claude_md.read_text()
+    assert "ii-structure" in content
+    assert "files --summary" in content
+    assert "outline" in content
+
+
+def test_init_appends_to_existing(project_with_root):
+    claude_md = project_with_root / "CLAUDE.md"
+    claude_md.write_text("# My Project\n\nExisting instructions.\n")
+    result = run_cli("init", cwd=project_with_root)
+    assert result.returncode == 0
+    content = claude_md.read_text()
+    assert "My Project" in content  # original content preserved
+    assert "ii-structure" in content  # new content added
+
+
+def test_init_skips_if_already_present(project_with_root):
+    claude_md = project_with_root / "CLAUDE.md"
+    claude_md.write_text("# ii-structure\nAlready configured.\n")
+    result = run_cli("init", cwd=project_with_root)
+    assert "already exists" in result.stdout.lower()
