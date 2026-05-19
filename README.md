@@ -82,7 +82,7 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 
 | Command | What it does | Example |
 |---------|-------------|---------|
-| `files` | List indexed files | `ii-structure files --glob '*model*'` |
+| `files` | List indexed files, or project map with `--summary` | `ii-structure files --summary --path src/` |
 | `outline` | File skeleton — classes, functions, signatures. No bodies. | `ii-structure outline src/app.py --depth full` |
 | `locate` | Find where a symbol is defined | `ii-structure locate User/save` |
 | `imports` | Forward + reverse dependency graph | `ii-structure imports src/api.py --depth 2` |
@@ -100,16 +100,17 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | Command | What it does |
 |---------|-------------|
 | `help` | Structured YAML documentation — the agent's playbook |
+| `init` | Creates `CLAUDE.md` so your AI agent uses ii-structure automatically |
 
 ## Agent Workflow
 
 ```
-1. Orient     →  ii-structure files
-2. Explore    →  ii-structure outline <file>
-3. Find       →  ii-structure locate <name>
-4. Read       →  ii-structure body <name>
-5. Trace      →  ii-structure usages <name>
-6. Deps       →  ii-structure imports <file>
+1. Map        →  ii-structure files --summary        (project map — every file + signatures)
+2. Explore    →  ii-structure outline <file>          (file skeleton)
+3. Find       →  ii-structure locate <name>           (definition location)
+4. Read       →  ii-structure body <name>             (just the symbol, not the whole file)
+5. Trace      →  ii-structure usages <name>           (all callers, type-resolved)
+6. Deps       →  ii-structure imports <file>          (what depends on this?)
 ```
 
 The `help` command returns this workflow and per-command guidance as structured YAML — the agent reads it on first contact.
@@ -156,12 +157,25 @@ Total: 10 queries, 10/10 correct, 9411 bytes
 ## Installation
 
 ```bash
-pip install ii-structure
+# With pipx (recommended for CLI tools)
+pipx install git+https://github.com/somen4898/IntelligenceInterface.git
+
+# Or with pip in a venv
+pip install git+https://github.com/somen4898/IntelligenceInterface.git
 ```
+
+Then set up your AI agent to use it:
+
+```bash
+cd your-project
+ii-structure init
+```
+
+This creates a `CLAUDE.md` with usage instructions that your AI agent reads automatically every session. The agent will know when to use ii-structure vs native tools.
 
 **Requirements:** Python 3.10+
 
-**Dependencies:** jedi, pyyaml, click, pathspec — all pure Python except Jedi's optional C extensions.
+**Dependencies:** jedi, pyyaml, click, pathspec
 
 ## Development
 
@@ -171,7 +185,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 130 tests
+pytest tests/       # 137 tests
 ```
 
 ## Project Structure
