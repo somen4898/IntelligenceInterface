@@ -2,6 +2,12 @@ from ii_structure.index import Index
 
 
 def execute(idx: Index, query: str, limit: int = 20) -> list[dict]:
+    """Ranked search over symbol names and docstrings.
+
+    Scores matches by: exact name (100), prefix (80), substring in name (60),
+    or substring in docstring (20). Returns up to `limit` results sorted by
+    relevance, then file and line.
+    """
     query_lower = query.lower()
     scored = []
 

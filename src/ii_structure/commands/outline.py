@@ -7,6 +7,12 @@ def execute(
     depth: str = "top",
     kind: str | None = None,
 ) -> dict:
+    """Return the structural skeleton of a file: classes, functions, signatures, and docstrings.
+
+    Use depth='top' for top-level symbols only, or depth='full' to include
+    nested members (methods, inner functions). Filter by kind to see only
+    classes, functions, methods, variables, or imports.
+    """
     if file not in idx.files:
         raise FileNotFoundError(f"File '{file}' not found in index")
 

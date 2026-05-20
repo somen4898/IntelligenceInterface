@@ -8,6 +8,12 @@ def execute(
     depth: int = 1,
     include_external: bool = False,
 ) -> dict:
+    """Build forward and reverse dependency graphs for a file.
+
+    Forward: what this file imports (recursively up to `depth` levels).
+    Reverse: which project files import this file.
+    Set include_external=True to also list third-party modules.
+    """
     if file not in idx.files:
         raise FileNotFoundError(f"File '{file}' not found in index")
 
