@@ -127,6 +127,6 @@ def execute(
         "file": candidate["file"],
         "anchor": anchor,
         "position": position,
-        "lines_added": len([l for l in indented_lines if l.strip() != "" or l == ""]),
+        "lines_added": len(indented_lines),
         "inserted_range": [insert_line_1indexed, insert_line_1indexed + len(indented_lines) - 1],
     }

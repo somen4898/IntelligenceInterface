@@ -1,4 +1,3 @@
-import pathlib
 import textwrap
 
 import pytest
@@ -106,7 +105,7 @@ def test_insert_after_last_method(tmp_project):
 
     new_code = "def to_dict(self):\n    return {'name': self.name}"
 
-    result = execute(
+    execute(
         idx=idx,
         project_root=str(tmp_path),
         anchor="User/delete",
@@ -140,7 +139,7 @@ def test_insert_after_top_level(tmp_project):
 
     new_code = "def another_helper():\n    return 99"
 
-    result = execute(
+    execute(
         idx=idx,
         project_root=str(tmp_path),
         anchor="helper",
@@ -182,7 +181,7 @@ def test_insert_preserves_indentation(tmp_project):
 
     content = (tmp_path / "models.py").read_text()
     lines = content.splitlines()
-    check_lines = [l for l in lines if "def check" in l]
+    check_lines = [line for line in lines if "def check" in line]
     assert len(check_lines) == 1
     # Should be indented at method level (4 spaces)
     assert check_lines[0].startswith("    def check")

@@ -1,4 +1,3 @@
-import pathlib
 import textwrap
 
 import pytest
@@ -85,7 +84,7 @@ def test_replace_preserves_indentation(tmp_project):
     # New body with NO indentation — should be re-indented to match method level
     new_body = "def save(self):\n    return True"
 
-    result = execute(
+    execute(
         idx=idx,
         project_root=str(tmp_path),
         name="User/save",
@@ -95,12 +94,12 @@ def test_replace_preserves_indentation(tmp_project):
     content = (tmp_path / "models.py").read_text()
     lines = content.splitlines()
     # Find the save method line
-    save_lines = [l for l in lines if "def save" in l]
+    save_lines = [line for line in lines if "def save" in line]
     assert len(save_lines) == 1
     # Should be indented at method level (4 spaces)
     assert save_lines[0].startswith("    def save")
     # Body should be indented 8 spaces
-    return_lines = [l for l in lines if "return True" in l]
+    return_lines = [line for line in lines if "return True" in line]
     assert len(return_lines) == 1
     assert return_lines[0].startswith("        return True")
 

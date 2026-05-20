@@ -1,5 +1,4 @@
 """Tests for content_hash on body and --expect-hash on write commands."""
-import pathlib
 import textwrap
 
 import pytest
