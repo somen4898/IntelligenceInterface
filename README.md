@@ -109,7 +109,22 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | `replace-body` | Replace a symbol's full source via stdin | `echo 'def save(self): pass' \| ii-structure replace-body User/save` |
 | `insert-symbol` | Insert new code before/after a symbol via stdin | `echo 'def validate(self): pass' \| ii-structure insert-symbol --after User/save` |
 
-Both write commands support `--expect-hash` for optimistic concurrency — pass the `content_hash` from `body` to reject the write if the file changed since the last read.
+Both write commands:
+- **Auto-indent** — new code is re-indented to match the target symbol's level, including deeply nested classes
+- **`--expect-hash`** — pass the `content_hash` from `body` to reject the write if the file changed since the last read (optimistic concurrency)
+- **Index auto-refresh** — the structural index is updated after every write, no rebuild needed
+
+**Safe write workflow:**
+```bash
+# 1. Read the symbol — get source + content_hash
+ii-structure body User/save
+# Returns: content_hash: sha256:a1b2c3d4...
+
+# 2. Write with hash verification — rejected if file changed since step 1
+echo 'def save(self):
+    self.db.update(self.to_dict())
+    return True' | ii-structure replace-body User/save --expect-hash sha256:a1b2c3d4...
+```
 
 ### Meta
 
@@ -142,6 +157,10 @@ Python's `ast` module gives identical structural extraction with zero native dep
 **Why include test files by default in `usages`?**
 
 Every major tool (Sourcegraph, VS Code, Serena) includes tests by default. Excluding them during refactors causes agents to miss call sites and ship broken code. The `--no-tests` flag is opt-in for exploration.
+
+**Why symbol-level writes instead of line-based edits?**
+
+Every major AI coding tool (Claude Code, Aider, Cursor, Codex CLI) converged on content-addressed editing (search/replace or full rewrite) over line-number-based editing. Academic benchmarks (Diff-XYZ 2025, "To Diff or Not to Diff" 2025) confirm that LLMs reliably produce wrong line numbers — search/replace hits 94% accuracy while line-number formats hit 14-38%. `replace-body` is a full rewrite scoped to a single symbol, which is the sweet spot: the scope is small enough (5-50 lines) that full replacement is cheap, and the agent doesn't need to compute line numbers or exact `old_str` matches.
 
 **Why YAML output?**
 
@@ -212,7 +231,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 213 tests
+pytest tests/       # 241 tests
 ```
 
 ## Project Structure
