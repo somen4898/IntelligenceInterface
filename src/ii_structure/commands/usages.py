@@ -11,6 +11,12 @@ def execute(
     limit: int = 50,
     include_tests: bool = True,
 ) -> list[dict]:
+    """Find all references to a symbol, resolved by type analysis.
+
+    Uses language-specific backends (Jedi for Python, tsserver for TypeScript,
+    gopls for Go) to find accurate call sites and references. Filter results
+    by path_scope, kind_filter, or exclude test files with include_tests=False.
+    """
     # Find the symbol first to know which file/language
     candidates = idx.search_symbols(name)
     if candidates:

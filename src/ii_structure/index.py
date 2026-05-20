@@ -12,6 +12,12 @@ SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", ".ii-struct
 
 
 class Index:
+    """In-memory index of all source symbols, imports, and metadata for a project.
+
+    Supports incremental refresh (only re-parses changed files) and
+    persistence to disk via JSON serialization.
+    """
+
     def __init__(
         self,
         project_root: str,

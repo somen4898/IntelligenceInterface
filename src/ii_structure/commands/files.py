@@ -8,6 +8,11 @@ def execute(
     path_prefix: str | None = None,
     summary: bool = False,
 ) -> list:
+    """List all indexed source files, optionally filtered by glob or path prefix.
+
+    When summary=True, includes top-level symbol signatures for each file,
+    giving a quick project map without reading full outlines.
+    """
     files = sorted(idx.files.keys())
 
     if path_prefix:
