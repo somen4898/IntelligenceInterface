@@ -188,8 +188,9 @@ def help_cmd(ctx, command):
 @cli.command("replace-body")
 @click.argument("name")
 @click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.option("--expect-hash", default=None, help="Reject if file content hash doesn't match (from body command)")
 @click.pass_context
-def replace_body(ctx, name, file_hint):
+def replace_body(ctx, name, file_hint, expect_hash):
     """Replace the full source of a symbol with new code from stdin."""
     if sys.stdin.isatty():
         click.echo(format_error("replace-body", "No input on stdin. Pipe the new body.",
@@ -201,7 +202,8 @@ def replace_body(ctx, name, file_hint):
         root = str(ctx.obj["root"])
         from ii_structure.commands.replace_body import execute
         result = execute(idx=idx, project_root=root, name=name,
-                        new_body=new_body, file_hint=file_hint)
+                        new_body=new_body, file_hint=file_hint,
+                        expect_hash=expect_hash)
         click.echo(format_success("replace-body", result))
     except Exception as e:
         click.echo(format_error("replace-body", str(e)))
@@ -212,8 +214,9 @@ def replace_body(ctx, name, file_hint):
 @click.option("--after", "after_symbol", default=None, help="Insert after this symbol")
 @click.option("--before", "before_symbol", default=None, help="Insert before this symbol")
 @click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.option("--expect-hash", default=None, help="Reject if file content hash doesn't match (from body command)")
 @click.pass_context
-def insert_symbol(ctx, after_symbol, before_symbol, file_hint):
+def insert_symbol(ctx, after_symbol, before_symbol, file_hint, expect_hash):
     """Insert new code before or after an existing symbol."""
     if not after_symbol and not before_symbol:
         click.echo(format_error("insert-symbol", "Must specify --after or --before"))
@@ -232,7 +235,8 @@ def insert_symbol(ctx, after_symbol, before_symbol, file_hint):
         anchor = after_symbol or before_symbol
         position = "after" if after_symbol else "before"
         result = execute(idx=idx, project_root=root, anchor=anchor,
-                        position=position, new_code=new_code, file_hint=file_hint)
+                        position=position, new_code=new_code, file_hint=file_hint,
+                        expect_hash=expect_hash)
         click.echo(format_success("insert-symbol", result))
     except Exception as e:
         click.echo(format_error("insert-symbol", str(e)))

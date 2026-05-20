@@ -1,5 +1,15 @@
+import hashlib
+import pathlib
+
 from ii_structure.index import Index
 from ii_structure.backends import get_backend, get_language
+
+
+def _file_content_hash(project_root: str, rel_path: str) -> str:
+    """Compute SHA-256 hash of a file's content."""
+    file_path = pathlib.Path(project_root) / rel_path
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    return f"sha256:{hashlib.sha256(content.encode()).hexdigest()[:16]}"
 
 
 def execute(
@@ -8,6 +18,8 @@ def execute(
     name: str,
     file_hint: str | None = None,
 ) -> dict | None:
+    result = None
+
     # Find the symbol first to know which file/language
     candidates = idx.search_symbols(name)
     if candidates:
@@ -21,18 +33,25 @@ def execute(
         lang = get_language(file_path)
         if lang:
             backend = get_backend(file_path)
-            return backend.get_definition_source(
+            result = backend.get_definition_source(
                 project_root=project_root,
                 name=name,
                 index=idx,
                 file_hint=file_hint,
             )
 
-    # Fallback to Python backend (preserves original behavior)
-    from ii_structure.resolver import get_definition_source
-    return get_definition_source(
-        project_root=project_root,
-        name=name,
-        index=idx,
-        file_hint=file_hint,
-    )
+    if result is None:
+        # Fallback to Python backend (preserves original behavior)
+        from ii_structure.resolver import get_definition_source
+        result = get_definition_source(
+            project_root=project_root,
+            name=name,
+            index=idx,
+            file_hint=file_hint,
+        )
+
+    # Attach content_hash so write commands can verify freshness
+    if result is not None and "file" in result:
+        result["content_hash"] = _file_content_hash(project_root, result["file"])
+
+    return result

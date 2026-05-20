@@ -100,7 +100,7 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `usages` | Find all references, resolved by type | `ii-structure usages User/save --no-tests` |
-| `body` | Full source of one symbol | `ii-structure body Index/build` |
+| `body` | Full source of one symbol + content hash | `ii-structure body Index/build` |
 
 ### Write (symbol-level code modification)
 
@@ -108,6 +108,8 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 |---------|-------------|---------|
 | `replace-body` | Replace a symbol's full source via stdin | `echo 'def save(self): pass' \| ii-structure replace-body User/save` |
 | `insert-symbol` | Insert new code before/after a symbol via stdin | `echo 'def validate(self): pass' \| ii-structure insert-symbol --after User/save` |
+
+Both write commands support `--expect-hash` for optimistic concurrency — pass the `content_hash` from `body` to reject the write if the file changed since the last read.
 
 ### Meta
 
@@ -210,7 +212,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 204 tests
+pytest tests/       # 213 tests
 ```
 
 ## Project Structure

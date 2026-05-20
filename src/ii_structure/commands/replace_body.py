@@ -1,3 +1,4 @@
+import hashlib
 import pathlib
 
 from ii_structure.index import Index, _parse_and_build_entry
@@ -9,6 +10,7 @@ def execute(
     name: str,
     new_body: str,
     file_hint: str | None = None,
+    expect_hash: str | None = None,
 ) -> dict:
     """Replace the full source of a symbol with new code.
 
@@ -42,6 +44,17 @@ def execute(
         raise ValueError(f"File '{candidate['file']}' not found on disk")
 
     file_content = source_file.read_text(encoding="utf-8", errors="replace")
+
+    # 2b. Verify content hash if provided
+    if expect_hash is not None:
+        actual_hash = f"sha256:{hashlib.sha256(file_content.encode()).hexdigest()[:16]}"
+        if actual_hash != expect_hash:
+            raise ValueError(
+                f"File has changed since last read (hash mismatch). "
+                f"Expected {expect_hash}, got {actual_hash}. "
+                f"Re-read with 'body' to get the current content."
+            )
+
     file_lines = file_content.splitlines()
 
     # 3. Detect indentation of the existing symbol
