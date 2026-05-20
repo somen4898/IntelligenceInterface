@@ -3,6 +3,7 @@
 import json
 import pathlib
 import subprocess
+import sys
 import time
 import yaml
 from typing import Any
@@ -23,7 +24,7 @@ def run_query(query: dict, project_root: str) -> dict:
 
     for cmd_str in query["commands"]:
         args = cmd_str.split()
-        full_cmd = ["ii-structure", "--project", project_root] + args
+        full_cmd = [sys.executable, "-m", "ii_structure.cli", "--project", project_root] + args
 
         start = time.monotonic()
         result = subprocess.run(

@@ -1,4 +1,5 @@
 import json
+import sys
 import yaml
 import subprocess
 import pathlib
@@ -7,7 +8,7 @@ import pytest
 
 def run_cli(*args, cwd=None):
     result = subprocess.run(
-        ["python", "-m", "ii_structure.cli", *args],
+        [sys.executable, "-m", "ii_structure.cli", *args],
         capture_output=True,
         text=True,
         cwd=cwd,

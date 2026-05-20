@@ -44,7 +44,7 @@ def _get_index(ctx) -> Index:
 @click.option("--summary", is_flag=True, default=False, help="Include top-level symbol signatures per file")
 @click.pass_context
 def files(ctx, glob_pattern, path_prefix, summary):
-    """List all indexed Python files."""
+    """List all indexed source files."""
     try:
         idx = _get_index(ctx)
         from ii_structure.commands.files import execute
@@ -330,6 +330,8 @@ MARKER = "# ii-structure"
 @click.pass_context
 def init(ctx):
     """Add ii-structure instructions to CLAUDE.md for this project."""
+    import shutil
+
     root = ctx.obj.get("root")
     if root is None:
         root = pathlib.Path.cwd()
@@ -349,6 +351,43 @@ def init(ctx):
         claude_md.write_text(CLAUDE_MD_SECTION.lstrip())
         click.echo(f"Created {claude_md} with ii-structure instructions")
 
+    # Detect languages and language servers
+    click.echo("")
+    click.echo("Languages detected:")
+
+    # Python
+    has_py = any(root.rglob("*.py"))
+    has_jedi = True
+    try:
+        import jedi
+    except ImportError:
+        has_jedi = False
+    if has_py:
+        if has_jedi:
+            click.echo("  Python (.py):     \u2713 full support (Jedi installed)")
+        else:
+            click.echo("  Python (.py):     \u26a0 structural only \u2014 install jedi for type-resolved usages:")
+            click.echo("                      pip install jedi")
+
+    # Go
+    has_go = any(root.rglob("*.go"))
+    if has_go:
+        if shutil.which("gopls"):
+            click.echo("  Go (.go):         \u2713 full support (gopls available)")
+        else:
+            click.echo("  Go (.go):         \u26a0 structural only \u2014 install gopls for type-resolved usages:")
+            click.echo("                      go install golang.org/x/tools/gopls@latest")
+
+    # TypeScript
+    has_ts = any(root.rglob("*.ts")) or any(root.rglob("*.tsx"))
+    if has_ts:
+        if shutil.which("typescript-language-server"):
+            click.echo("  TypeScript (.ts): \u2713 full support (tsserver available)")
+        else:
+            click.echo("  TypeScript (.ts): \u26a0 structural only \u2014 install tsserver for type-resolved usages:")
+            click.echo("                      npm install -g typescript-language-server typescript")
+
+    click.echo("")
     click.echo("Your AI agent will now use ii-structure automatically.")
 
 

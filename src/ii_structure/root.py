@@ -1,6 +1,6 @@
 import pathlib
 
-MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", ".git")
+MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", "go.mod", "tsconfig.json", "package.json", ".git")
 
 
 def find_project_root(start: pathlib.Path) -> pathlib.Path:

@@ -5,7 +5,7 @@ from dataclasses import asdict
 
 import pathspec
 
-from ii_structure.parser import parse_file
+from ii_structure.backends import get_backend, get_language, supported_extensions
 
 INDEX_VERSION = 1
 SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", ".ii-structure", ".pytest_cache"}
@@ -27,9 +27,9 @@ class Index:
         root = root.resolve()
         gitignore_spec = _load_gitignore(root)
         files = {}
-        for py_file in _walk_python_files(root, gitignore_spec):
-            rel = str(py_file.relative_to(root))
-            entry = _parse_and_build_entry(py_file)
+        for source_file in _walk_source_files(root, gitignore_spec):
+            rel = str(source_file.relative_to(root))
+            entry = _parse_and_build_entry(source_file)
             files[rel] = entry
         return cls(project_root=str(root), files=files)
 
@@ -58,21 +58,21 @@ class Index:
         gitignore_spec = _load_gitignore(root)
         current_files = set()
 
-        for py_file in _walk_python_files(root, gitignore_spec):
-            rel = str(py_file.relative_to(root))
+        for source_file in _walk_source_files(root, gitignore_spec):
+            rel = str(source_file.relative_to(root))
             current_files.add(rel)
             if rel in self.files:
                 stored_mtime = self.files[rel].get("mtime", 0)
-                actual_mtime = py_file.stat().st_mtime
+                actual_mtime = source_file.stat().st_mtime
                 if actual_mtime != stored_mtime:
-                    content = py_file.read_text(encoding="utf-8", errors="replace")
+                    content = source_file.read_text(encoding="utf-8", errors="replace")
                     actual_hash = _content_hash(content)
                     if actual_hash != self.files[rel].get("content_hash"):
-                        self.files[rel] = _parse_and_build_entry(py_file)
+                        self.files[rel] = _parse_and_build_entry(source_file)
                     else:
                         self.files[rel]["mtime"] = actual_mtime
             else:
-                self.files[rel] = _parse_and_build_entry(py_file)
+                self.files[rel] = _parse_and_build_entry(source_file)
 
         stale_keys = set(self.files.keys()) - current_files
         for key in stale_keys:
@@ -130,11 +130,12 @@ def load_or_build_index(root: pathlib.Path) -> Index:
     return idx
 
 
-def _parse_and_build_entry(py_file: pathlib.Path) -> dict:
-    content = py_file.read_text(encoding="utf-8", errors="replace")
-    result = parse_file(str(py_file), content)
+def _parse_and_build_entry(source_file: pathlib.Path) -> dict:
+    content = source_file.read_text(encoding="utf-8", errors="replace")
+    backend = get_backend(str(source_file))
+    result = backend.parse_file(str(source_file), content)
     return {
-        "mtime": py_file.stat().st_mtime,
+        "mtime": source_file.stat().st_mtime,
         "content_hash": _content_hash(content),
         "symbols": [asdict(s) for s in result.symbols],
         "imports": [asdict(i) for i in result.imports],
@@ -154,12 +155,17 @@ def _load_gitignore(root: pathlib.Path) -> pathspec.PathSpec | None:
     return None
 
 
-def _walk_python_files(
+def _walk_source_files(
     root: pathlib.Path,
     gitignore_spec: pathspec.PathSpec | None,
 ) -> list[pathlib.Path]:
     files = []
-    for path in root.rglob("*.py"):
+    extensions = supported_extensions()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix not in extensions:
+            continue
         rel = path.relative_to(root)
         parts = rel.parts
         if any(part in SKIP_DIRS for part in parts):
@@ -167,4 +173,4 @@ def _walk_python_files(
         if gitignore_spec and gitignore_spec.match_file(str(rel)):
             continue
         files.append(path)
-    return sorted(files)
+    return files

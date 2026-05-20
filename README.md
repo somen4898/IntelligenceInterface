@@ -1,8 +1,8 @@
 # ii-structure
 
-**Structural code navigation for LLM agents. 14.6x fewer tokens than grep + read on real projects.**
+**Structural code navigation for LLM agents. Supports Python, Go, and TypeScript. 14.6x fewer tokens than grep + read on real projects.**
 
-LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer."
+LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 7 commands work identically across Python, Go, and TypeScript.
 
 ```
 pip install ii-structure
@@ -66,15 +66,22 @@ The pattern: savings scale with project size. On a small codebase (1.3k lines), 
 
 ## How It Works
 
-ii-structure parses Python files with the `ast` module (stdlib) and uses [Jedi](https://github.com/davidhalter/jedi) for type-resolved reference finding. It maintains a lightweight JSON index that auto-updates when files change.
+ii-structure uses language-specific parsers to extract structural information:
+
+- **Python:** `ast` module (stdlib) + [Jedi](https://github.com/davidhalter/jedi) for type-resolved references
+- **Go:** [tree-sitter](https://tree-sitter.github.io/) + optional [gopls](https://pkg.go.dev/golang.org/x/tools/gopls) for type-resolved references
+- **TypeScript/TSX:** [tree-sitter](https://tree-sitter.github.io/) + optional [typescript-language-server](https://github.com/typescript-language-server/typescript-language-server) for type-resolved references
+
+It maintains a lightweight JSON index that auto-updates when files change.
 
 ```
 Agent runs command → Index loads (or builds on first run) → Query executes → Compact YAML returned
 ```
 
 - **No server.** No daemon. No MCP. Each invocation is a fresh stateless process.
-- **No config.** Auto-detects project root via `pyproject.toml` / `setup.py` / `.git`.
+- **No config.** Auto-detects project root via `pyproject.toml` / `setup.py` / `go.mod` / `tsconfig.json` / `package.json` / `.git`.
 - **Fast.** Structural commands complete in <300ms. Type-resolved `usages` in <1s.
+- **Graceful degradation.** Language servers are optional — without them, `usages` falls back to index-based name matching.
 
 ## Commands
 
@@ -88,7 +95,7 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | `imports` | Forward + reverse dependency graph | `ii-structure imports src/api.py --depth 2` |
 | `search` | Ranked search over symbol names and docstrings | `ii-structure search authenticate` |
 
-### Type-Aware (Jedi-powered)
+### Type-Aware (Jedi/gopls/tsserver-powered)
 
 | Command | What it does | Example |
 |---------|-------------|---------|
@@ -117,9 +124,9 @@ The `help` command returns this workflow and per-command guidance as structured 
 
 ## Key Design Decisions
 
-**Why `ast` + Jedi, not tree-sitter?**
+**Why `ast` for Python and tree-sitter for Go/TypeScript?**
 
-Tree-sitter is a parser — it gives you syntax trees but no type information. When you search for `save()`, tree-sitter finds every `.save()` call in the project. Jedi knows that `user.save()` calls `User.save` specifically, not `Product.save`. For Python, `ast` gives identical structural extraction with zero native dependencies, and Jedi adds semantic resolution that tree-sitter cannot provide. Tree-sitter is the planned multi-language backend for v2.
+Python's `ast` module gives identical structural extraction with zero native dependencies. For Go and TypeScript, tree-sitter provides fast, accurate parsing across languages. Type-resolved reference finding uses language-specific tooling: Jedi for Python, gopls for Go, typescript-language-server for TypeScript. Language servers are optional — structural commands always work, `usages` gracefully degrades to index-based name matching when servers aren't installed.
 
 **Why include test files by default in `usages`?**
 
@@ -175,7 +182,16 @@ This creates a `CLAUDE.md` with usage instructions that your AI agent reads auto
 
 **Requirements:** Python 3.10+
 
-**Dependencies:** jedi, pyyaml, click, pathspec
+**Dependencies:** jedi, pyyaml, click, pathspec, tree-sitter-language-pack
+
+**Optional (for type-resolved usages in Go/TypeScript):**
+```bash
+# Go
+go install golang.org/x/tools/gopls@latest
+
+# TypeScript
+npm install -g typescript-language-server typescript
+```
 
 ## Development
 
@@ -185,7 +201,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 137 tests
+pytest tests/       # 188 tests
 ```
 
 ## Project Structure
@@ -193,12 +209,19 @@ pytest tests/       # 137 tests
 ```
 src/ii_structure/
 ├── cli.py              # Click entry point
-├── parser.py           # ast-based symbol/import extraction
+├── parser.py           # Python ast-based symbol/import extraction
 ├── index.py            # Structural index with staleness detection
-├── resolver.py         # Jedi-powered type resolution
+├── resolver.py         # Jedi-powered type resolution (Python)
+├── lsp_client.py       # Generic LSP client for Go/TS language servers
 ├── output.py           # YAML envelope formatting
 ├── root.py             # Project root detection
 ├── help_content.yaml   # Agent playbook
+├── backends/
+│   ├── __init__.py     # Backend dispatcher (routes by file extension)
+│   ├── base.py         # LanguageBackend protocol
+│   ├── python.py       # Python backend (ast + Jedi)
+│   ├── golang.py       # Go backend (tree-sitter + optional gopls)
+│   └── typescript.py   # TypeScript backend (tree-sitter + optional tsserver)
 └── commands/
     ├── files.py        # List indexed files
     ├── outline.py      # File skeleton
@@ -212,8 +235,7 @@ src/ii_structure/
 
 ## What This Is Not
 
-- **Not a language server.** No LSP, no MCP, no protocol. Just a CLI.
-- **Not multi-language (yet).** Python only in v1. Architecture supports swapping to tree-sitter for v2.
+- **Not a language server.** Uses LSP clients internally for type resolution, but ii-structure itself is just a CLI.
 - **Not for humans.** Output is compact YAML optimized for token efficiency, not human aesthetics.
 - **Not a replacement for grep.** When you need raw text search, use grep. ii-structure is for structural questions.
 
