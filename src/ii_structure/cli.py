@@ -185,6 +185,60 @@ def help_cmd(ctx, command):
         sys.exit(1)
 
 
+@cli.command("replace-body")
+@click.argument("name")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def replace_body(ctx, name, file_hint):
+    """Replace the full source of a symbol with new code from stdin."""
+    if sys.stdin.isatty():
+        click.echo(format_error("replace-body", "No input on stdin. Pipe the new body.",
+                   suggestion="echo 'new code' | ii-structure replace-body Symbol/name"))
+        sys.exit(1)
+    new_body = sys.stdin.read()
+    try:
+        idx = _get_index(ctx)
+        root = str(ctx.obj["root"])
+        from ii_structure.commands.replace_body import execute
+        result = execute(idx=idx, project_root=root, name=name,
+                        new_body=new_body, file_hint=file_hint)
+        click.echo(format_success("replace-body", result))
+    except Exception as e:
+        click.echo(format_error("replace-body", str(e)))
+        sys.exit(1)
+
+
+@cli.command("insert-symbol")
+@click.option("--after", "after_symbol", default=None, help="Insert after this symbol")
+@click.option("--before", "before_symbol", default=None, help="Insert before this symbol")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def insert_symbol(ctx, after_symbol, before_symbol, file_hint):
+    """Insert new code before or after an existing symbol."""
+    if not after_symbol and not before_symbol:
+        click.echo(format_error("insert-symbol", "Must specify --after or --before"))
+        sys.exit(1)
+    if after_symbol and before_symbol:
+        click.echo(format_error("insert-symbol", "Specify only one of --after or --before"))
+        sys.exit(1)
+    if sys.stdin.isatty():
+        click.echo(format_error("insert-symbol", "No input on stdin."))
+        sys.exit(1)
+    new_code = sys.stdin.read()
+    try:
+        idx = _get_index(ctx)
+        root = str(ctx.obj["root"])
+        from ii_structure.commands.insert_symbol import execute
+        anchor = after_symbol or before_symbol
+        position = "after" if after_symbol else "before"
+        result = execute(idx=idx, project_root=root, anchor=anchor,
+                        position=position, new_code=new_code, file_hint=file_hint)
+        click.echo(format_success("insert-symbol", result))
+    except Exception as e:
+        click.echo(format_error("insert-symbol", str(e)))
+        sys.exit(1)
+
+
 @cli.command(name="imports")
 @click.argument("file")
 @click.option("--depth", type=int, default=1, help="Hop distance")
@@ -301,12 +355,14 @@ You have `ii-structure` installed. It gives you structural code navigation that 
 | Search for something | `Grep "auth" -r` | `ii-structure search auth` |
 | Check dependencies | `Read file and scan imports` | `ii-structure imports file.py` |
 | Orient to project | `Glob **/*.py` then Read each | `ii-structure files --summary` |
+| Replace a function/method | Read file + Edit with old_str + new_str | `ii-structure replace-body MyClass/method` (pipe new body via stdin) |
+| Insert new code structurally | Read file + figure out line number + Edit | `ii-structure insert-symbol --after MyClass/method` (pipe code via stdin) |
 
 4. **KEEP using native tools for these tasks:**
    - `Glob` — finding files by name pattern
    - `Grep` — searching for string literals, TODOs, comments, regex
    - `Read` — reading specific line ranges you already know
-   - `Edit/Write` — modifying files (ii-structure is read-only)
+   - `Edit/Write` — line-level edits, non-symbol changes (ii-structure handles symbol-level writes)
 
 ## Key Flags
 

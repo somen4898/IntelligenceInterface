@@ -255,6 +255,62 @@ commands:
               module: services.user_service
               names: [create_user, delete_user]
 
+  replace-body:
+    description: "Replace the full source of a symbol with new code from stdin."
+    when_to_use: |
+      When you need to rewrite a function, method, or class. Pipe the new source via stdin.
+      This is the structural alternative to Edit with old_str/new_str — you don't need to
+      compute the exact old text. Just name the symbol and provide the replacement.
+    when_not_to_use: |
+      For inserting new code (use insert-symbol). For non-symbol edits like changing
+      a string literal or comment (use your native Edit tool).
+    cost: fast
+    usage: "echo 'new code' | ii-structure replace-body <name> [--file FILE]"
+    tips: |
+      Name paths work: 'replace-body User/save' targets just the save method
+      --file disambiguates when the same name exists in multiple files
+      The new body's indentation is automatically adjusted to match the existing symbol
+      The index auto-refreshes after the write — no rebuild needed
+    example:
+      input: "echo 'def save(self):\\n    self.db.update(self.to_dict())\\n    return True' | ii-structure replace-body User/save"
+      output: |
+        ok: true
+        command: replace-body
+        result:
+          file: src/models/user.py
+          symbol: User/save
+          lines_removed: 4
+          lines_added: 3
+          new_range: [25, 27]
+
+  insert-symbol:
+    description: "Insert new code before or after an existing symbol."
+    when_to_use: |
+      When you need to add a new function, method, or class next to an existing symbol.
+      Pipe the new code via stdin and specify --after or --before to position it.
+      Handles indentation and blank line separators automatically.
+    when_not_to_use: |
+      For replacing existing code (use replace-body). For adding code at arbitrary
+      line positions (use your native Edit tool).
+    cost: fast
+    usage: "echo 'new code' | ii-structure insert-symbol --after <name> [--file FILE]"
+    tips: |
+      --after User/save inserts the new code right after the save method
+      --before main inserts before the main function
+      Indentation matches the anchor symbol's level automatically
+      A blank line separator is added between the anchor and new code
+    example:
+      input: "echo 'def validate(self):\\n    if not self.name:\\n        raise ValueError(\"name required\")' | ii-structure insert-symbol --after User/save"
+      output: |
+        ok: true
+        command: insert-symbol
+        result:
+          file: src/models/user.py
+          anchor: User/save
+          position: after
+          lines_added: 3
+          inserted_range: [29, 31]
+
   search:
     description: "Ranked search over symbol names and docstrings."
     when_to_use: |

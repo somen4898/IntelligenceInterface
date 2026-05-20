@@ -2,7 +2,7 @@
 
 **Structural code navigation for LLM agents. Supports Python, Go, and TypeScript. 14.6x fewer tokens than grep + read on real projects.**
 
-LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 7 commands work identically across Python, Go, and TypeScript.
+LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 9 commands (7 read, 2 write) work identically across Python, Go, and TypeScript.
 
 ```
 pip install ii-structure
@@ -102,6 +102,13 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | `usages` | Find all references, resolved by type | `ii-structure usages User/save --no-tests` |
 | `body` | Full source of one symbol | `ii-structure body Index/build` |
 
+### Write (symbol-level code modification)
+
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `replace-body` | Replace a symbol's full source via stdin | `echo 'def save(self): pass' \| ii-structure replace-body User/save` |
+| `insert-symbol` | Insert new code before/after a symbol via stdin | `echo 'def validate(self): pass' \| ii-structure insert-symbol --after User/save` |
+
 ### Meta
 
 | Command | What it does |
@@ -118,6 +125,8 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 4. Read       →  ii-structure body <name>             (just the symbol, not the whole file)
 5. Trace      →  ii-structure usages <name>           (all callers, type-resolved)
 6. Deps       →  ii-structure imports <file>          (what depends on this?)
+7. Replace    →  ii-structure replace-body <name>     (rewrite a symbol via stdin)
+8. Insert     →  ii-structure insert-symbol --after <name>  (add code next to a symbol)
 ```
 
 The `help` command returns this workflow and per-command guidance as structured YAML — the agent reads it on first contact.
@@ -201,7 +210,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 188 tests
+pytest tests/       # 204 tests
 ```
 
 ## Project Structure
@@ -230,6 +239,8 @@ src/ii_structure/
     ├── body.py         # Symbol source code
     ├── imports.py      # Dependency graph
     ├── search.py       # Ranked symbol search
+    ├── replace_body.py # Replace symbol source
+    ├── insert_symbol.py# Insert code by position
     └── help.py         # Agent documentation
 ```
 
