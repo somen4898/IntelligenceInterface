@@ -8,6 +8,12 @@ def execute(
     name: str,
     file_hint: str | None = None,
 ) -> dict | None:
+    """Retrieve the full source code of a single symbol by name.
+
+    Resolves the symbol via the index, then reads its complete definition
+    from disk. Use file_hint to disambiguate when multiple symbols share
+    the same name. Returns file path, line range, and source text.
+    """
     # Find the symbol first to know which file/language
     candidates = idx.search_symbols(name)
     if candidates:

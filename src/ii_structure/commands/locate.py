@@ -8,6 +8,12 @@ def execute(
     file: str | None = None,
     match: str = "exact",
 ) -> list[dict]:
+    """Find where a symbol is defined by its name path.
+
+    Supports slash-separated paths like 'ClassName/method' to locate nested
+    symbols. Prefix with '/' for anchored matches (top-level only).
+    Returns file, line, kind, signature, and docstring for each match.
+    """
     anchored = name.startswith("/")
     clean_name = name.lstrip("/")
     parts = clean_name.split("/")
