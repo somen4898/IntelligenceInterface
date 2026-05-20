@@ -1,4 +1,5 @@
 from __future__ import annotations
+import pathlib
 from tree_sitter_language_pack import get_parser
 from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
 
@@ -191,10 +192,10 @@ class GoBackend:
                     type_map[s.parent].children.append(s.name)
 
     def find_usages(self, project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-        raise NotImplementedError("Go usages require LSP integration")
+        return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
 
     def get_definition_source(self, project_root, name, index, file_hint=None):
-        raise NotImplementedError("Go definition source require LSP integration")
+        return _index_based_definition(project_root, name, index, file_hint)
 
 
 def _get_children(node):
@@ -226,3 +227,71 @@ def _extract_receiver_type(receiver_text: str) -> str | None:
     elif len(parts) == 1:
         return parts[0].lstrip("*")
     return None
+
+
+def _is_test_file(path: str) -> bool:
+    parts = path.split("/")
+    filename = parts[-1]
+    return filename.endswith("_test.go") or any(p == "test" for p in parts[:-1])
+
+
+def _get_context_line(file_path: pathlib.Path, line: int) -> str:
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="replace")
+        lines = source.splitlines()
+        if 0 < line <= len(lines):
+            return lines[line - 1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _index_based_usages(project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
+    root = pathlib.Path(project_root)
+    candidates = index.search_symbols(name)
+    results = []
+    for candidate in candidates:
+        rel = candidate["file"]
+        if path_scope and not rel.startswith(path_scope):
+            continue
+        if not include_tests and _is_test_file(rel):
+            continue
+        usage_kind = "definition"
+        if kind_filter and usage_kind != kind_filter:
+            continue
+        context = _get_context_line(root / rel, candidate["line"])
+        results.append({
+            "file": rel,
+            "line": candidate["line"],
+            "kind": usage_kind,
+            "context": context,
+        })
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _index_based_definition(project_root, name, index, file_hint=None):
+    root = pathlib.Path(project_root)
+    candidates = index.search_symbols(name)
+    if not candidates:
+        return None
+    if file_hint:
+        candidates = [c for c in candidates if c["file"] == file_hint]
+        if not candidates:
+            return None
+    candidate = candidates[0]
+    file_path = root / candidate["file"]
+    source = file_path.read_text(encoding="utf-8", errors="replace")
+    lines = source.splitlines()
+    start = candidate["line"] - 1
+    end = candidate.get("end_line", candidate["line"])
+    body = "\n".join(lines[start:end])
+    return {
+        "file": candidate["file"],
+        "line": candidate["line"],
+        "end_line": end,
+        "name": candidate["name"],
+        "kind": candidate["kind"],
+        "source": body,
+    }
