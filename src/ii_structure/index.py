@@ -93,7 +93,12 @@ class Index:
                     if symbol["name"] == parts[0]:
                         results.append({**symbol, "file": rel_path})
                 elif len(parts) == 2:
-                    if symbol["name"] == parts[-1] and symbol.get("parent") == parts[0]:
+                    parent = symbol.get("parent") or ""
+                    parent_match = (
+                        parent == parts[0]
+                        or parent.endswith("/" + parts[0])
+                    )
+                    if symbol["name"] == parts[-1] and parent_match:
                         results.append({**symbol, "file": rel_path})
                 else:
                     full_path = symbol["name"]
