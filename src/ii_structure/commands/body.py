@@ -18,6 +18,13 @@ def execute(
     name: str,
     file_hint: str | None = None,
 ) -> dict | None:
+    """Retrieve the full source code of a single symbol by name.
+
+    Resolves the symbol via the index, then reads its complete definition
+    from disk. Use file_hint to disambiguate when multiple symbols share
+    the same name. Returns file path, line range, source text, and a
+    content_hash for use with --expect-hash on write commands.
+    """
     result = None
 
     # Find the symbol first to know which file/language
