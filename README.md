@@ -2,7 +2,7 @@
 
 **Structural code navigation for LLM agents. Supports Python, Go, and TypeScript. 14.6x fewer tokens than grep + read on real projects.**
 
-LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 7 commands work identically across Python, Go, and TypeScript.
+LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 9 commands (7 read, 2 write) work identically across Python, Go, and TypeScript.
 
 ```
 pip install ii-structure
@@ -100,7 +100,31 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `usages` | Find all references, resolved by type | `ii-structure usages User/save --no-tests` |
-| `body` | Full source of one symbol | `ii-structure body Index/build` |
+| `body` | Full source of one symbol + content hash | `ii-structure body Index/build` |
+
+### Write (symbol-level code modification)
+
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `replace-body` | Replace a symbol's full source via stdin | `echo 'def save(self): pass' \| ii-structure replace-body User/save` |
+| `insert-symbol` | Insert new code before/after a symbol via stdin | `echo 'def validate(self): pass' \| ii-structure insert-symbol --after User/save` |
+
+Both write commands:
+- **Auto-indent** — new code is re-indented to match the target symbol's level, including deeply nested classes
+- **`--expect-hash`** — pass the `content_hash` from `body` to reject the write if the file changed since the last read (optimistic concurrency)
+- **Index auto-refresh** — the structural index is updated after every write, no rebuild needed
+
+**Safe write workflow:**
+```bash
+# 1. Read the symbol — get source + content_hash
+ii-structure body User/save
+# Returns: content_hash: sha256:a1b2c3d4...
+
+# 2. Write with hash verification — rejected if file changed since step 1
+echo 'def save(self):
+    self.db.update(self.to_dict())
+    return True' | ii-structure replace-body User/save --expect-hash sha256:a1b2c3d4...
+```
 
 ### Meta
 
@@ -118,6 +142,8 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 4. Read       →  ii-structure body <name>             (just the symbol, not the whole file)
 5. Trace      →  ii-structure usages <name>           (all callers, type-resolved)
 6. Deps       →  ii-structure imports <file>          (what depends on this?)
+7. Replace    →  ii-structure replace-body <name>     (rewrite a symbol via stdin)
+8. Insert     →  ii-structure insert-symbol --after <name>  (add code next to a symbol)
 ```
 
 The `help` command returns this workflow and per-command guidance as structured YAML — the agent reads it on first contact.
@@ -131,6 +157,10 @@ Python's `ast` module gives identical structural extraction with zero native dep
 **Why include test files by default in `usages`?**
 
 Every major tool (Sourcegraph, VS Code, Serena) includes tests by default. Excluding them during refactors causes agents to miss call sites and ship broken code. The `--no-tests` flag is opt-in for exploration.
+
+**Why symbol-level writes instead of line-based edits?**
+
+Every major AI coding tool (Claude Code, Aider, Cursor, Codex CLI) converged on content-addressed editing (search/replace or full rewrite) over line-number-based editing. Academic benchmarks (Diff-XYZ 2025, "To Diff or Not to Diff" 2025) confirm that LLMs reliably produce wrong line numbers — search/replace hits 94% accuracy while line-number formats hit 14-38%. `replace-body` is a full rewrite scoped to a single symbol, which is the sweet spot: the scope is small enough (5-50 lines) that full replacement is cheap, and the agent doesn't need to compute line numbers or exact `old_str` matches.
 
 **Why YAML output?**
 
@@ -201,7 +231,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 188 tests
+pytest tests/       # 241 tests
 ```
 
 ## Project Structure
@@ -230,6 +260,8 @@ src/ii_structure/
     ├── body.py         # Symbol source code
     ├── imports.py      # Dependency graph
     ├── search.py       # Ranked symbol search
+    ├── replace_body.py # Replace symbol source
+    ├── insert_symbol.py# Insert code by position
     └── help.py         # Agent documentation
 ```
 
