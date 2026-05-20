@@ -1,7 +1,9 @@
 from __future__ import annotations
 import pathlib
+import shutil
 from tree_sitter_language_pack import get_parser
 from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
+from ii_structure.lsp_client import LspClient
 
 
 class GoBackend:
@@ -192,7 +194,56 @@ class GoBackend:
                     type_map[s.parent].children.append(s.name)
 
     def find_usages(self, project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-        return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
+        if not shutil.which("gopls"):
+            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
+
+        # Try LSP-based resolution
+        root = pathlib.Path(project_root)
+        candidates = index.search_symbols(name)
+        if not candidates:
+            return []
+
+        try:
+            lsp = LspClient(command=["gopls", "serve"], project_root=project_root)
+            candidate = candidates[0]
+            file_path = str(root / candidate["file"])
+            content = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
+            lsp.open_document(file_path, content, language_id="go")
+
+            col = _find_name_column(content, candidate["line"], candidate["name"])
+            refs = lsp.find_references(file_path, candidate["line"] - 1, col)
+            lsp.shutdown()
+
+            if not refs:
+                return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
+
+            results = []
+            seen = set()
+            for ref in refs:
+                try:
+                    rel = str(pathlib.Path(ref["file"]).relative_to(root))
+                except ValueError:
+                    continue
+                if path_scope and not rel.startswith(path_scope):
+                    continue
+                if not include_tests and _is_test_file(rel):
+                    continue
+                key = (rel, ref["line"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                context = _get_context_line(root / rel, ref["line"])
+                results.append({
+                    "file": rel,
+                    "line": ref["line"],
+                    "kind": "reference",
+                    "context": context,
+                })
+                if len(results) >= limit:
+                    break
+            return results
+        except Exception:
+            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
 
     def get_definition_source(self, project_root, name, index, file_hint=None):
         return _index_based_definition(project_root, name, index, file_hint)
@@ -227,6 +278,15 @@ def _extract_receiver_type(receiver_text: str) -> str | None:
     elif len(parts) == 1:
         return parts[0].lstrip("*")
     return None
+
+
+def _find_name_column(source: str, line: int, name: str) -> int:
+    lines = source.splitlines()
+    if 0 < line <= len(lines):
+        idx = lines[line - 1].find(name)
+        if idx >= 0:
+            return idx
+    return 0
 
 
 def _is_test_file(path: str) -> bool:
