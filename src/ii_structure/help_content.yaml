@@ -1,7 +1,9 @@
 overview: |
-  ii-structure gives you structural code navigation for Python projects.
+  ii-structure gives you structural code navigation for Python, Go, and TypeScript projects.
   Instead of grepping text and reading whole files, ask structural questions
-  and get compact YAML answers.
+  and get compact YAML answers. All commands work identically across languages.
+
+  SUPPORTED LANGUAGES: Python (.py), Go (.go), TypeScript (.ts, .tsx)
 
   WHY USE THIS: outline + locate + body costs ~200 tokens to understand a symbol.
   Reading the file costs ~2000 tokens. usages gives you type-resolved references
@@ -9,6 +11,12 @@ overview: |
 
   FIRST RUN: The first invocation builds an index (~2s for a 50k-line project).
   Subsequent runs are instant (<300ms). The index auto-updates when files change.
+
+  LANGUAGE SERVERS (optional, for type-resolved usages):
+  - Python: jedi (installed by default)
+  - Go: gopls (go install golang.org/x/tools/gopls@latest)
+  - TypeScript: typescript-language-server (npm install -g typescript-language-server typescript)
+  Without language servers, usages returns index-based results (name matching).
 
 workflow: |
   RECOMMENDED WORKFLOW:
@@ -149,11 +157,13 @@ commands:
             parent: User
 
   usages:
-    description: "Find all references to a symbol, resolved by type. Powered by Jedi."
+    description: "Find all references to a symbol, resolved by type. Uses Jedi (Python), gopls (Go), or tsserver (TypeScript)."
     when_to_use: |
       When you need to know everywhere a symbol is used — callers, imports, assignments.
       This is TYPE-RESOLVED: 'usages User/save' finds only calls to User.save(),
       not Product.save() or dict.save(). This is the key advantage over grep.
+      Works across Python, Go, and TypeScript. If language server is not installed,
+      falls back to index-based name matching (still useful, just not type-resolved).
     when_not_to_use: |
       For simple text search — use grep.
       For finding definitions — use locate (faster, no Jedi overhead).
