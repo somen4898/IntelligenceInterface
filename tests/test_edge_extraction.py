@@ -1,5 +1,7 @@
 import textwrap
 from ii_structure.parser import parse_file
+from ii_structure.backends.golang import GoBackend
+from ii_structure.backends.typescript import TypeScriptBackend
 
 
 def test_extracts_function_call():
@@ -130,3 +132,127 @@ def test_existing_parse_still_works():
     assert len(result.imports) >= 1
     assert result.edges is not None
     assert result.error is None
+
+
+# ── Go backend edge extraction tests ──
+
+
+def test_go_extracts_function_call():
+    source = """\
+package main
+
+func caller() {
+    helper()
+}
+
+func helper() int {
+    return 42
+}
+"""
+    backend = GoBackend()
+    result = backend.parse_file("main.go", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "helper" in targets
+
+
+def test_go_extracts_method_call():
+    source = """\
+package main
+
+type Server struct{}
+
+func (s *Server) Start() {
+    s.Init()
+}
+
+func (s *Server) Init() {}
+"""
+    backend = GoBackend()
+    result = backend.parse_file("server.go", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "Init" in targets
+
+
+def test_go_extracts_import_edges():
+    source = """\
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello")
+}
+"""
+    backend = GoBackend()
+    result = backend.parse_file("main.go", source)
+    import_edges = [e for e in result.edges if e.kind == "IMPORTS"]
+    assert len(import_edges) >= 1
+
+
+# ── TypeScript backend edge extraction tests ──
+
+
+def test_ts_extracts_function_call():
+    source = """\
+function caller(): void {
+    helper();
+}
+
+function helper(): number {
+    return 42;
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("app.ts", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "helper" in targets
+
+
+def test_ts_extracts_new_expression():
+    source = """\
+class User {}
+
+function createUser(): User {
+    return new User();
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("app.ts", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "User" in targets
+
+
+def test_ts_extracts_method_call():
+    source = """\
+class Service {
+    save(): void {
+        this.validate();
+    }
+    validate(): boolean {
+        return true;
+    }
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("service.ts", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "validate" in targets
+
+
+def test_ts_extracts_import_edges():
+    source = """\
+import { User } from './models';
+
+function getUser(): User {
+    return new User();
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("app.ts", source)
+    import_edges = [e for e in result.edges if e.kind == "IMPORTS"]
+    assert len(import_edges) >= 1

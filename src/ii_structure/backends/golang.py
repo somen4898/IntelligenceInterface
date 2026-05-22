@@ -2,7 +2,7 @@ from __future__ import annotations
 import pathlib
 import shutil
 from tree_sitter_language_pack import get_parser
-from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
+from ii_structure.parser import SymbolInfo, ImportInfo, EdgeInfo, ParseResult
 from ii_structure.lsp_client import LspClient
 
 
@@ -22,10 +22,12 @@ class GoBackend:
             symbols, imports = self._extract(root, source)
             if not symbols and not imports:
                 return ParseResult(symbols=[], imports=[], edges=[], error=f"Syntax error in {file_path}")
-            return ParseResult(symbols=symbols, imports=imports, edges=[], error=f"Syntax error in {file_path}")
+            edges = self._extract_edges(root, source, file_path, symbols, imports)
+            return ParseResult(symbols=symbols, imports=imports, edges=edges, error=f"Syntax error in {file_path}")
 
         symbols, imports = self._extract(root, source)
-        return ParseResult(symbols=symbols, imports=imports, edges=[], error=None)
+        edges = self._extract_edges(root, source, file_path, symbols, imports)
+        return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
     def _extract(self, root, source: str) -> tuple[list[SymbolInfo], list[ImportInfo]]:
         symbols: list[SymbolInfo] = []
@@ -185,6 +187,78 @@ class GoBackend:
                     docstring=_clean_comment(prev_comment),
                     parent=None,
                 ))
+
+    def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
+        """Extract CALLS and IMPORTS edges from the AST."""
+        edges: list[EdgeInfo] = []
+
+        # IMPORTS edges from already-extracted imports
+        for imp in imports:
+            edges.append(EdgeInfo(
+                kind="IMPORTS", source=file_path,
+                target=imp.module, file_path=file_path, line=imp.line,
+            ))
+
+        # Build function/method nodes for walking calls
+        func_nodes = []
+        self._collect_func_nodes(root, source, func_nodes)
+
+        # For each function/method, walk its body for call_expression nodes
+        for qn, node in func_nodes:
+            body = node.child_by_field_name("body")
+            if not body:
+                continue
+            self._walk_calls(body, source, file_path, qn, edges)
+
+        return edges
+
+    def _collect_func_nodes(self, root, source: str, result: list):
+        """Collect (qualified_name, node) for all function/method declarations."""
+        for child in _get_children(root):
+            kind = child.kind()
+            if kind == "function_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    result.append((name, child))
+            elif kind == "method_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    receiver = child.child_by_field_name("receiver")
+                    if receiver:
+                        recv_type = _extract_receiver_type(_get_text(receiver, source))
+                        if recv_type:
+                            name = f"{recv_type}.{name}"
+                    result.append((name, child))
+
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo]):
+        """Recursively walk a node's subtree for call_expression nodes."""
+        for child in _get_children(node):
+            if child.kind() == "call_expression":
+                call_name = self._get_call_name(child, source)
+                if call_name:
+                    edges.append(EdgeInfo(
+                        kind="CALLS", source=enclosing_qn,
+                        target=call_name, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            self._walk_calls(child, source, file_path, enclosing_qn, edges)
+
+    def _get_call_name(self, call_node, source: str) -> str | None:
+        """Extract the function/method name from a call_expression node."""
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return None
+        kind = func_node.kind()
+        if kind == "identifier":
+            return _get_text(func_node, source)
+        if kind == "selector_expression":
+            # obj.Method() — return the field (method) name
+            field_node = func_node.child_by_field_name("field")
+            if field_node:
+                return _get_text(field_node, source)
+        return None
 
     def _attach_methods_to_types(self, symbols: list[SymbolInfo]):
         type_map = {s.name: s for s in symbols if s.kind in ("class", "interface")}

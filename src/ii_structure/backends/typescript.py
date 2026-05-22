@@ -2,7 +2,7 @@ from __future__ import annotations
 import pathlib
 import shutil
 from tree_sitter_language_pack import get_parser
-from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
+from ii_structure.parser import SymbolInfo, ImportInfo, EdgeInfo, ParseResult
 from ii_structure.lsp_client import LspClient
 
 
@@ -23,10 +23,12 @@ class TypeScriptBackend:
             symbols, imports = self._extract(root, source)
             if not symbols and not imports:
                 return ParseResult(symbols=[], imports=[], edges=[], error=f"Syntax error in {file_path}")
-            return ParseResult(symbols=symbols, imports=imports, edges=[], error=f"Syntax error in {file_path}")
+            edges = self._extract_edges(root, source, file_path, symbols, imports)
+            return ParseResult(symbols=symbols, imports=imports, edges=edges, error=f"Syntax error in {file_path}")
 
         symbols, imports = self._extract(root, source)
-        return ParseResult(symbols=symbols, imports=imports, edges=[], error=None)
+        edges = self._extract_edges(root, source, file_path, symbols, imports)
+        return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
     def _extract(self, root, source: str) -> tuple[list[SymbolInfo], list[ImportInfo]]:
         symbols: list[SymbolInfo] = []
@@ -243,6 +245,113 @@ class TypeScriptBackend:
                         docstring=_clean_jsdoc(prev_comment),
                         parent=None,
                     ))
+
+    def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
+        """Extract CALLS and IMPORTS edges from the AST."""
+        edges: list[EdgeInfo] = []
+
+        # IMPORTS edges from already-extracted imports
+        for imp in imports:
+            edges.append(EdgeInfo(
+                kind="IMPORTS", source=file_path,
+                target=imp.module, file_path=file_path, line=imp.line,
+            ))
+
+        # Collect function/method nodes for walking calls
+        func_nodes: list[tuple[str, object]] = []
+        self._collect_func_nodes(root, source, func_nodes, parent_class=None)
+
+        for qn, node in func_nodes:
+            body = node.child_by_field_name("body")
+            if not body:
+                continue
+            self._walk_calls(body, source, file_path, qn, edges)
+
+        return edges
+
+    def _collect_func_nodes(self, root, source: str, result: list, parent_class: str | None):
+        """Collect (qualified_name, node) for all function/method declarations."""
+        for child in _get_children(root):
+            kind = child.kind()
+            if kind == "function_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    result.append((name, child))
+            elif kind == "class_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    class_name = _get_text(name_node, source)
+                    body = child.child_by_field_name("body")
+                    if body:
+                        self._collect_class_methods(body, source, result, class_name)
+            elif kind == "export_statement":
+                self._collect_func_nodes(child, source, result, parent_class)
+            elif kind == "lexical_declaration":
+                # Arrow functions: const foo = (...) => { ... }
+                for sub in _get_children(child):
+                    if sub.kind() == "variable_declarator":
+                        name_node = sub.child_by_field_name("name")
+                        value_node = sub.child_by_field_name("value")
+                        if name_node and value_node and value_node.kind() == "arrow_function":
+                            name = _get_text(name_node, source)
+                            result.append((name, value_node))
+
+    def _collect_class_methods(self, body, source: str, result: list, class_name: str):
+        """Collect methods from a class body."""
+        for child in _get_children(body):
+            if child.kind() == "method_definition":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    if name != "constructor":
+                        qn = f"{class_name}.{name}"
+                    else:
+                        qn = f"{class_name}.{name}"
+                    result.append((qn, child))
+
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo]):
+        """Recursively walk a node's subtree for call/new expressions."""
+        for child in _get_children(node):
+            kind = child.kind()
+            if kind == "call_expression":
+                call_name = self._get_call_name(child, source)
+                if call_name:
+                    edges.append(EdgeInfo(
+                        kind="CALLS", source=enclosing_qn,
+                        target=call_name, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            elif kind == "new_expression":
+                call_name = self._get_new_name(child, source)
+                if call_name:
+                    edges.append(EdgeInfo(
+                        kind="CALLS", source=enclosing_qn,
+                        target=call_name, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            self._walk_calls(child, source, file_path, enclosing_qn, edges)
+
+    def _get_call_name(self, call_node, source: str) -> str | None:
+        """Extract function/method name from a call_expression node."""
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return None
+        kind = func_node.kind()
+        if kind == "identifier":
+            return _get_text(func_node, source)
+        if kind == "member_expression":
+            prop = func_node.child_by_field_name("property")
+            if prop:
+                return _get_text(prop, source)
+        return None
+
+    def _get_new_name(self, new_node, source: str) -> str | None:
+        """Extract constructor name from a new_expression node."""
+        constructor = new_node.child_by_field_name("constructor")
+        if constructor and constructor.kind() == "identifier":
+            return _get_text(constructor, source)
+        return None
 
     def _extract_import(self, node, source: str, imports):
         module = None
