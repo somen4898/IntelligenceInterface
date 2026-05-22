@@ -12,7 +12,7 @@ class GoBackend:
 
     def parse_file(self, file_path: str, source: str) -> ParseResult:
         if not source.strip():
-            return ParseResult(symbols=[], imports=[], error=None)
+            return ParseResult(symbols=[], imports=[], edges=[], error=None)
 
         tree = self._parser.parse(source)
         root = tree.root_node()
@@ -21,11 +21,11 @@ class GoBackend:
             # Check if it's a meaningful parse or just errors
             symbols, imports = self._extract(root, source)
             if not symbols and not imports:
-                return ParseResult(symbols=[], imports=[], error=f"Syntax error in {file_path}")
-            return ParseResult(symbols=symbols, imports=imports, error=f"Syntax error in {file_path}")
+                return ParseResult(symbols=[], imports=[], edges=[], error=f"Syntax error in {file_path}")
+            return ParseResult(symbols=symbols, imports=imports, edges=[], error=f"Syntax error in {file_path}")
 
         symbols, imports = self._extract(root, source)
-        return ParseResult(symbols=symbols, imports=imports, error=None)
+        return ParseResult(symbols=symbols, imports=imports, edges=[], error=None)
 
     def _extract(self, root, source: str) -> tuple[list[SymbolInfo], list[ImportInfo]]:
         symbols: list[SymbolInfo] = []
