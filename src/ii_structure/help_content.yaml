@@ -258,6 +258,90 @@ commands:
               module: services.user_service
               names: [create_user, delete_user]
 
+  blast-radius:
+    description: "Show the blast radius of changing a symbol — what code and tests are affected."
+    when_to_use: |
+      Before modifying a symbol, to understand what will be impacted. Shows affected symbols,
+      affected files, and tests that exercise the symbol (directly or transitively).
+    when_not_to_use: "For simple file-level dependency checks. Use 'imports' instead."
+    cost: moderate
+    usage: "ii-structure blast-radius <name> [--depth N] [--file FILE]"
+    tips: |
+      --depth controls how many hops to follow (default 3).
+      --file disambiguates when multiple symbols share a name.
+      The 'tests' field shows which test functions exercise this symbol.
+    example:
+      input: "ii-structure blast-radius User/save"
+      output: |
+        ok: true
+        command: blast-radius
+        result:
+          symbol: User/save
+          file: src/models/user.py
+          affected:
+            - symbol: create_user
+              file: src/services/user_service.py
+              line: 15
+              depth: 1
+              kind: function
+          affected_files: [src/services/user_service.py, src/api/routes.py]
+          tests:
+            - name: test_create_user
+              file: tests/test_services.py
+              indirect: true
+          total_affected: 3
+
+  dead-code:
+    description: "Find symbols with no callers — potentially dead code."
+    when_to_use: |
+      During cleanup or refactoring to find unused functions, methods, and classes.
+      Helps identify code that can be safely removed.
+    when_not_to_use: "For finding usages of a specific symbol. Use 'usages' instead."
+    cost: moderate
+    usage: "ii-structure dead-code [--file FILE]"
+    tips: |
+      --file restricts analysis to a single file.
+      Entry points (main functions, CLI handlers) will appear as dead code since
+      they aren't called by other code — use judgment.
+    example:
+      input: "ii-structure dead-code --file src/utils.py"
+      output: |
+        ok: true
+        command: dead-code
+        result:
+          - symbol: old_helper
+            file: src/utils.py
+            line: 45
+            kind: function
+            parent: null
+
+  test-coverage:
+    description: "Show structural test coverage for a symbol — which tests exercise it."
+    when_to_use: |
+      To check if a symbol has test coverage before modifying it. Shows direct and
+      transitive test coverage through the call graph.
+    when_not_to_use: "For runtime coverage data. This is structural analysis only."
+    cost: moderate
+    usage: "ii-structure test-coverage <name> [--depth N] [--file FILE]"
+    tips: |
+      --depth controls transitive discovery depth (default 2).
+      'indirect: true' means the test reaches the symbol through intermediate calls.
+      'covered: false' means no tests were found — consider adding one.
+    example:
+      input: "ii-structure test-coverage User/save"
+      output: |
+        ok: true
+        command: test-coverage
+        result:
+          symbol: User/save
+          file: src/models/user.py
+          tests:
+            - name: test_save
+              file: tests/test_models.py
+              indirect: false
+          total_tests: 1
+          covered: true
+
   replace-body:
     description: "Replace the full source of a symbol with new code from stdin."
     when_to_use: |

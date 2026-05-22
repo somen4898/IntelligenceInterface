@@ -243,6 +243,57 @@ def insert_symbol(ctx, after_symbol, before_symbol, file_hint, expect_hash):
         sys.exit(1)
 
 
+@cli.command("blast-radius")
+@click.argument("name")
+@click.option("--depth", type=int, default=3, help="Max traversal depth")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def blast_radius(ctx, name, depth, file_hint):
+    """Show what's affected if a symbol changes."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.blast_radius import execute
+        result = execute(idx=idx, project_root=str(ctx.obj["root"]),
+                        name=name, max_depth=depth, file_hint=file_hint)
+        click.echo(format_success("blast-radius", result))
+    except Exception as e:
+        click.echo(format_error("blast-radius", str(e)))
+        sys.exit(1)
+
+
+@cli.command("dead-code")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def dead_code(ctx, file_hint):
+    """Find symbols with no callers (potentially dead code)."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.dead_code import execute
+        result = execute(idx=idx, file_hint=file_hint)
+        click.echo(format_success("dead-code", result))
+    except Exception as e:
+        click.echo(format_error("dead-code", str(e)))
+        sys.exit(1)
+
+
+@cli.command("test-coverage")
+@click.argument("name")
+@click.option("--depth", type=int, default=2, help="Max depth for transitive test discovery")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def test_coverage(ctx, name, depth, file_hint):
+    """Show structural test coverage for a symbol."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.test_coverage import execute
+        result = execute(idx=idx, project_root=str(ctx.obj["root"]),
+                        name=name, max_depth=depth, file_hint=file_hint)
+        click.echo(format_success("test-coverage", result))
+    except Exception as e:
+        click.echo(format_error("test-coverage", str(e)))
+        sys.exit(1)
+
+
 @cli.command(name="imports")
 @click.argument("file")
 @click.option("--depth", type=int, default=1, help="Hop distance")
