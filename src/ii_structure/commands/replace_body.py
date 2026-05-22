@@ -1,7 +1,7 @@
 import hashlib
 import pathlib
 
-from ii_structure.index import Index, _parse_and_build_entry
+from ii_structure.index import Index
 
 
 def execute(
@@ -94,10 +94,30 @@ def execute(
     source_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     # 7. Refresh the index for this file
-    idx.files[candidate["file"]] = _parse_and_build_entry(source_file)
-    state_dir = root / ".ii-structure"
-    if state_dir.exists():
-        idx.save(state_dir)
+    # Re-parse the file with edge extraction
+    from ii_structure.backends import get_backend
+    content = source_file.read_text(encoding="utf-8", errors="replace")
+    backend = get_backend(str(source_file))
+    parse_result = backend.parse_file(str(source_file), content)
+
+    # Compute file hash
+    file_hash = f"sha256:{hashlib.sha256(content.encode()).hexdigest()[:16]}"
+
+    # Atomic update in graph — nodes + edges
+    idx.graph.store_file_nodes_edges(
+        candidate["file"], parse_result.symbols, parse_result.edges, file_hash
+    )
+
+    # Update aux data (imports, parse_error) if the index has file_aux
+    if hasattr(idx, '_update_file_aux'):
+        idx._update_file_aux(candidate["file"], parse_result, file_hash)
+
+    # Resolve any new bare call targets
+    idx.graph.resolve_bare_call_targets()
+    idx.graph.commit()
+
+    # Invalidate cache
+    idx._invalidate_cache()
 
     # 8. Return structured result
     return {
