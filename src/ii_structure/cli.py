@@ -391,46 +391,75 @@ def benchmark_compare(ctx, baseline_file):
 
 CLAUDE_MD_SECTION = """\
 
-# ii-structure — Use This Before Native Tools
+# ii-structure — MANDATORY for Code Navigation, Editing, and Analysis
 
-You have `ii-structure` installed. It gives you structural code navigation that uses 3-15x fewer tokens than Read/Grep/Glob for structural questions.
+You have `ii-structure` installed. It provides structural code navigation, symbol-level editing, and impact analysis. Uses 3-15x fewer tokens than Read/Grep/Glob.
 
-## Rules
+## HARD RULES — Violations Waste Tokens
 
-1. **ALWAYS run `ii-structure help` at the start of a new project** — it returns your full playbook
-2. **ALWAYS run `ii-structure files --summary` before exploring** — it's your project map
-3. **Use ii-structure INSTEAD of native tools for these tasks:**
+1. **NEVER read a source file to find a function.** Use `ii-structure body Symbol/name`.
+2. **NEVER grep for a symbol definition.** Use `ii-structure locate Name` or `ii-structure search query`.
+3. **NEVER read a whole file to understand its structure.** Use `ii-structure outline file.py --depth full`.
+4. **NEVER use Read + Edit to rewrite a function.** Use `ii-structure body Name` (get hash) → `ii-structure replace-body Name --expect-hash <hash>`.
+5. **ALWAYS run `ii-structure files --summary`** on any new or unfamiliar project.
+6. **ALWAYS run `ii-structure blast-radius Name`** before refactoring to understand impact.
 
-| Task | DON'T do this | DO this instead |
-|------|--------------|-----------------|
-| Understand a file | `Read entire_file.py` | `ii-structure outline entire_file.py --depth full` |
-| Find a definition | `Grep "class MyClass" -r` | `ii-structure locate MyClass` |
-| Find all callers | `Grep "my_function" -r` | `ii-structure usages my_function` |
-| Read one function | `Read big_file.py` (whole file) | `ii-structure body MyClass/method` |
-| Search for something | `Grep "auth" -r` | `ii-structure search auth` |
-| Check dependencies | `Read file and scan imports` | `ii-structure imports file.py` |
-| Orient to project | `Glob **/*.py` then Read each | `ii-structure files --summary` |
-| Replace a function/method | Read file + Edit with old_str + new_str | `ii-structure replace-body MyClass/method` (pipe new body via stdin) |
-| Insert new code structurally | Read file + figure out line number + Edit | `ii-structure insert-symbol --after MyClass/method` (pipe code via stdin) |
+## Decision Tree — What Tool To Use
 
-4. **KEEP using native tools for these tasks:**
-   - `Glob` — finding files by name pattern
-   - `Grep` — searching for string literals, TODOs, comments, regex
-   - `Read` — reading specific line ranges you already know
-   - `Edit/Write` — line-level edits, non-symbol changes (ii-structure handles symbol-level writes)
+```
+I need to...
+├── READ code
+│   ├── Know the symbol name? → ii-structure body Symbol/name
+│   ├── Know the file? → ii-structure outline file.py
+│   ├── Don't know the name? → ii-structure search <query>
+│   └── Need a string literal or regex? → Grep (ONLY case)
+│
+├── FIND something
+│   ├── Where is it defined? → ii-structure locate Name
+│   ├── Who calls it? → ii-structure usages Name
+│   ├── What depends on this file? → ii-structure imports file.py
+│   └── Looking for a filename? → Glob (ONLY case)
+│
+├── ANALYZE impact
+│   ├── What breaks if I change X? → ii-structure blast-radius X
+│   ├── Is there dead code? → ii-structure dead-code [--file FILE]
+│   └── Is X tested? → ii-structure test-coverage X
+│
+├── WRITE code
+│   ├── Rewrite a function/method?
+│   │   1. ii-structure body Name → get content_hash
+│   │   2. echo 'new code' | ii-structure replace-body Name --expect-hash <hash>
+│   ├── Add new code next to a symbol?
+│   │   1. ii-structure body AnchorName → get content_hash
+│   │   2. echo 'new code' | ii-structure insert-symbol --after AnchorName --expect-hash <hash>
+│   └── Non-symbol edit? → Edit tool
+│
+└── UNDERSTAND the project
+    ├── Project overview? → ii-structure files --summary
+    ├── File structure? → ii-structure outline file.py --depth full
+    └── Dependencies? → ii-structure imports file.py
+```
+
+## When Native Tools ARE Correct
+
+- `Glob` — finding files by name pattern (NOT for finding code)
+- `Grep` — string literals, TODOs, comments, regex (NOT for finding symbols)
+- `Read` — non-code files (config, docs) or specific line ranges you already know
+- `Edit/Write` — non-symbol edits (string changes, config)
 
 ## Key Flags
 
-- `--no-tests` on `usages` — exclude test files when exploring (not when refactoring)
+- `--expect-hash` on write commands — content_hash from `body`, prevents stale writes
+- `--depth N` on `blast-radius` — traversal depth (default 3)
+- `--no-tests` on `usages` — exclude test files when exploring
 - `--depth full` on `outline` — include methods inside classes
-- `--kind class|function|method` on `locate`/`outline` — filter by type
-- `--match substring` on `locate` — partial name matching
-- `--summary` on `files` — project map with signatures
+- `--kind` on `locate`/`outline` — filter by type
+- `--file` on any command — disambiguate when symbols share names
 
 ## Workflow
 
 ```
-New project → files --summary → pick interesting files → outline → locate/body → usages for impact
+New project → files --summary → outline → locate/body → blast-radius before refactoring → replace-body to edit → usages to verify
 ```
 """
 

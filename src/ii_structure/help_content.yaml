@@ -1,7 +1,7 @@
 overview: |
-  ii-structure gives you structural code navigation for Python, Go, and TypeScript projects.
-  Instead of grepping text and reading whole files, ask structural questions
-  and get compact YAML answers. All commands work identically across languages.
+  ii-structure gives you structural code navigation, symbol-level editing, and impact analysis
+  for Python, Go, and TypeScript projects. Instead of grepping text and reading whole files,
+  ask structural questions and get compact YAML answers. All commands work identically across languages.
 
   SUPPORTED LANGUAGES: Python (.py), Go (.go), TypeScript (.ts, .tsx)
 
@@ -27,6 +27,8 @@ workflow: |
   4. Read: Run 'body <name>' to read just the symbol you need
   5. Trace: Run 'usages <name>' to find all callers/references (type-resolved)
   6. Deps: Run 'imports <file>' to see what a file depends on
+  7. Analyze: Run 'blast-radius <name>' before refactoring to see what's affected
+  8. Write: Run 'body <name>' (get hash) → 'replace-body <name> --expect-hash' to edit safely
 
   QUICK PATTERNS:
 
@@ -47,6 +49,15 @@ workflow: |
 
   "What would break if I change file Y?"
     → ii-structure imports Y  (check imported_by)
+
+  "What breaks if I refactor function X?"
+    → ii-structure blast-radius X
+
+  "Is there unused code in this file?"
+    → ii-structure dead-code --file utils.py
+
+  "Is X tested?"
+    → ii-structure test-coverage X
 
   "I'm looking for something related to authentication"
     → ii-structure search auth
