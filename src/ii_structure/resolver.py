@@ -7,20 +7,6 @@ except ImportError:
     jedi = None
 
 
-TEST_PATTERNS = {"test_", "tests/", "test/", "_test.py", "conftest.py"}
-
-
-def _is_test_file(path: str) -> bool:
-    parts = path.split("/")
-    filename = parts[-1]
-    return (
-        filename.startswith("test_")
-        or filename.endswith("_test.py")
-        or filename == "conftest.py"
-        or any(p in ("tests", "test") for p in parts[:-1])
-    )
-
-
 def get_definition_source(
     project_root: str,
     name: str,

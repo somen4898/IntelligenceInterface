@@ -397,19 +397,6 @@ def load_or_build_index(root: pathlib.Path) -> Index:
     return idx
 
 
-def _parse_and_build_entry(source_file: pathlib.Path) -> dict:
-    content = source_file.read_text(encoding="utf-8", errors="replace")
-    backend = get_backend(str(source_file))
-    result = backend.parse_file(str(source_file), content)
-    return {
-        "mtime": source_file.stat().st_mtime,
-        "content_hash": _content_hash(content),
-        "symbols": [asdict(s) for s in result.symbols],
-        "imports": [asdict(i) for i in result.imports],
-        "parse_error": result.error,
-    }
-
-
 def _content_hash(content: str) -> str:
     return f"sha256:{hashlib.sha256(content.encode()).hexdigest()[:16]}"
 
