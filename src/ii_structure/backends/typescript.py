@@ -1,9 +1,7 @@
 from __future__ import annotations
 import pathlib
-import shutil
 from tree_sitter_language_pack import get_parser
 from ii_structure.parser import SymbolInfo, ImportInfo, EdgeInfo, ParseResult
-from ii_structure.lsp_client import LspClient
 
 
 class TypeScriptBackend:
@@ -379,59 +377,6 @@ class TypeScriptBackend:
                 is_relative=module.startswith("."),
             ))
 
-    def find_usages(self, project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-        if not shutil.which("typescript-language-server"):
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-        # Try LSP-based resolution
-        root = pathlib.Path(project_root)
-        candidates = index.search_symbols(name)
-        if not candidates:
-            return []
-
-        try:
-            lsp = LspClient(command=["typescript-language-server", "--stdio"], project_root=project_root)
-            candidate = candidates[0]
-            file_path = str(root / candidate["file"])
-            content = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
-            lang_id = "typescriptreact" if file_path.endswith(".tsx") else "typescript"
-            lsp.open_document(file_path, content, language_id=lang_id)
-
-            col = _find_name_column(content, candidate["line"], candidate["name"])
-            refs = lsp.find_references(file_path, candidate["line"] - 1, col)
-            lsp.shutdown()
-
-            if not refs:
-                return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-            results = []
-            seen = set()
-            for ref in refs:
-                try:
-                    rel = str(pathlib.Path(ref["file"]).relative_to(root))
-                except ValueError:
-                    continue
-                if path_scope and not rel.startswith(path_scope):
-                    continue
-                if not include_tests and _is_test_file(rel):
-                    continue
-                key = (rel, ref["line"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                context = _get_context_line(root / rel, ref["line"])
-                results.append({
-                    "file": rel,
-                    "line": ref["line"],
-                    "kind": "reference",
-                    "context": context,
-                })
-                if len(results) >= limit:
-                    break
-            return results
-        except Exception:
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
     def get_definition_source(self, project_root, name, index, file_hint=None):
         return _index_based_definition(project_root, name, index, file_hint)
 
@@ -460,63 +405,6 @@ def _clean_jsdoc(comment: str | None) -> str | None:
             lines.append(line)
         text = " ".join(lines).strip()
     return text if text else None
-
-
-def _find_name_column(source: str, line: int, name: str) -> int:
-    lines = source.splitlines()
-    if 0 < line <= len(lines):
-        idx = lines[line - 1].find(name)
-        if idx >= 0:
-            return idx
-    return 0
-
-
-def _is_test_file(path: str) -> bool:
-    parts = path.split("/")
-    filename = parts[-1]
-    return (
-        filename.endswith(".test.ts")
-        or filename.endswith(".test.tsx")
-        or filename.endswith(".spec.ts")
-        or filename.endswith(".spec.tsx")
-        or any(p in ("tests", "test", "__tests__") for p in parts[:-1])
-    )
-
-
-def _get_context_line(file_path: pathlib.Path, line: int) -> str:
-    try:
-        source = file_path.read_text(encoding="utf-8", errors="replace")
-        lines = source.splitlines()
-        if 0 < line <= len(lines):
-            return lines[line - 1].strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _index_based_usages(project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-    root = pathlib.Path(project_root)
-    candidates = index.search_symbols(name)
-    results = []
-    for candidate in candidates:
-        rel = candidate["file"]
-        if path_scope and not rel.startswith(path_scope):
-            continue
-        if not include_tests and _is_test_file(rel):
-            continue
-        usage_kind = "definition"
-        if kind_filter and usage_kind != kind_filter:
-            continue
-        context = _get_context_line(root / rel, candidate["line"])
-        results.append({
-            "file": rel,
-            "line": candidate["line"],
-            "kind": usage_kind,
-            "context": context,
-        })
-        if len(results) >= limit:
-            break
-    return results
 
 
 def _index_based_definition(project_root, name, index, file_hint=None):
