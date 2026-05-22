@@ -199,10 +199,12 @@ class GraphStore:
                     self.upsert_edge(*edge)
                 else:
                     # EdgeInfo-like object with attributes
+                    src = getattr(edge, "source_qualified", None) or getattr(edge, "source", "")
+                    tgt = getattr(edge, "target_qualified", None) or getattr(edge, "target", "")
                     self.upsert_edge(
                         edge.kind,
-                        edge.source_qualified,
-                        edge.target_qualified,
+                        src,
+                        tgt,
                         edge.file_path,
                         getattr(edge, "line", 0),
                     )

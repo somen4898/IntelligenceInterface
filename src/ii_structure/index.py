@@ -5,135 +5,391 @@ from dataclasses import asdict
 
 import pathspec
 
-from ii_structure.backends import get_backend, get_language, supported_extensions
+from ii_structure.backends import get_backend, supported_extensions
+from ii_structure.graph import GraphStore
 
 INDEX_VERSION = 1
 SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", ".ii-structure", ".pytest_cache"}
 
+# ---------------------------------------------------------------------------
+# Auxiliary table for per-file metadata not covered by the nodes/edges schema
+# (imports JSON, parse_error).  Created alongside the graph tables.
+# ---------------------------------------------------------------------------
+_AUX_SCHEMA = """\
+CREATE TABLE IF NOT EXISTS file_aux (
+    file_path TEXT PRIMARY KEY,
+    imports_json TEXT NOT NULL DEFAULT '[]',
+    parse_error TEXT,
+    content_hash TEXT
+);
+"""
+
+
+def _ensure_aux_table(conn):
+    """Create the file_aux table if it does not exist."""
+    conn.executescript(_AUX_SCHEMA)
+
+
+# ---------------------------------------------------------------------------
+# _FilesView — dict-like facade over GraphStore for backward compatibility
+# ---------------------------------------------------------------------------
+
+class _FilesView:
+    """Dict-like view over GraphStore so ``idx.files[path]`` keeps working."""
+
+    def __init__(self, graph: GraphStore):
+        self._graph = graph
+        self._conn = graph._conn
+        _ensure_aux_table(self._conn)
+
+    # -- dict protocol -----------------------------------------------------
+
+    def __contains__(self, key):
+        # A file is "in" the index if it has nodes OR an aux row
+        if self._graph.get_nodes_by_file(key):
+            return True
+        row = self._conn.execute(
+            "SELECT 1 FROM file_aux WHERE file_path = ?", (key,)
+        ).fetchone()
+        return row is not None
+
+    def __getitem__(self, key):
+        nodes = self._graph.get_nodes_by_file(key)
+        aux = self._conn.execute(
+            "SELECT imports_json, parse_error, content_hash FROM file_aux WHERE file_path = ?",
+            (key,),
+        ).fetchone()
+
+        if not nodes and aux is None:
+            raise KeyError(key)
+
+        symbols = [_node_to_old_symbol(n) for n in nodes]
+        imports_json = aux["imports_json"] if aux else "[]"
+        parse_error = aux["parse_error"] if aux else None
+        content_hash = aux["content_hash"] if aux else ""
+
+        return {
+            "symbols": symbols,
+            "imports": json.loads(imports_json),
+            "mtime": 0,
+            "content_hash": content_hash,
+            "parse_error": parse_error,
+        }
+
+    def __setitem__(self, key, value):
+        """Write commands call ``idx.files[path] = _parse_and_build_entry(f)``.
+
+        *value* is the old-format dict with ``symbols``, ``imports``,
+        ``content_hash``, ``parse_error``.  We convert back to
+        ``SymbolInfo`` objects and push into the graph.
+        """
+        from ii_structure.parser import SymbolInfo
+
+        fhash = value.get("content_hash", "")
+
+        # Convert symbol dicts → SymbolInfo
+        sym_objects = []
+        for s in value.get("symbols", []):
+            sym_objects.append(SymbolInfo(
+                name=s["name"],
+                kind=s["kind"],
+                line=s["line"],
+                end_line=s["end_line"],
+                signature=s["signature"],
+                docstring=s.get("docstring"),
+                parent=s.get("parent"),
+                children=s.get("children", []),
+                decorators=s.get("decorators", []),
+            ))
+
+        self._graph.store_file_nodes_edges(key, sym_objects, [], fhash)
+
+        # Store aux data
+        imports_json = json.dumps(value.get("imports", []))
+        parse_error = value.get("parse_error")
+        self._conn.execute(
+            "INSERT OR REPLACE INTO file_aux (file_path, imports_json, parse_error, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (key, imports_json, parse_error, fhash),
+        )
+
+    def __delitem__(self, key):
+        self._graph.remove_file_data(key)
+        self._conn.execute("DELETE FROM file_aux WHERE file_path = ?", (key,))
+
+    def __len__(self):
+        # Count distinct files across nodes + aux
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM ("
+            "  SELECT file_path FROM nodes "
+            "  UNION "
+            "  SELECT file_path FROM file_aux"
+            ")"
+        ).fetchone()
+        return row[0]
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def keys(self):
+        cur = self._conn.execute(
+            "SELECT file_path FROM ("
+            "  SELECT DISTINCT file_path FROM nodes "
+            "  UNION "
+            "  SELECT file_path FROM file_aux"
+            ") ORDER BY file_path"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+    def items(self):
+        for f in self.keys():
+            yield f, self[f]
+
+    def values(self):
+        for f in self.keys():
+            yield self[f]
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
+def _node_to_old_symbol(node: dict) -> dict:
+    """Convert a GraphStore node row to the old symbol dict format."""
+    return {
+        "name": node["name"],
+        "kind": node["kind"],
+        "line": node["line_start"],
+        "end_line": node["line_end"],
+        "signature": node.get("signature", ""),
+        "docstring": node.get("docstring"),
+        "parent": node.get("parent_name"),
+        "children": json.loads(node.get("children") or "[]"),
+        "decorators": json.loads(node.get("decorators") or "[]"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Index class — wraps GraphStore
+# ---------------------------------------------------------------------------
 
 class Index:
     """In-memory index of all source symbols, imports, and metadata for a project.
 
-    Supports incremental refresh (only re-parses changed files) and
-    persistence to disk via JSON serialization.
+    Backed by SQLite via ``GraphStore``.  The public API is unchanged so
+    existing commands continue to work.
     """
 
-    def __init__(
-        self,
-        project_root: str,
-        files: dict,
-        version: int = INDEX_VERSION,
-    ):
+    def __init__(self, project_root: str, graph: GraphStore):
         self.project_root = project_root
-        self.files = files
-        self.version = version
+        self.graph = graph
+        self.version = INDEX_VERSION
+        self._files_cache: _FilesView | None = None
+
+    @property
+    def files(self) -> _FilesView:
+        """Backward-compatible dict-like view over the graph."""
+        if self._files_cache is None:
+            self._files_cache = _FilesView(self.graph)
+        return self._files_cache
+
+    def _invalidate_cache(self):
+        self._files_cache = None
+
+    # -- construction -------------------------------------------------------
 
     @classmethod
     def build(cls, root: pathlib.Path) -> "Index":
         root = root.resolve()
+        state_dir = root / ".ii-structure"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        db_path = state_dir / "graph.db"
+        graph = GraphStore(str(db_path))
+        _ensure_aux_table(graph._conn)
+
         gitignore_spec = _load_gitignore(root)
-        files = {}
         for source_file in _walk_source_files(root, gitignore_spec):
             rel = str(source_file.relative_to(root))
-            entry = _parse_and_build_entry(source_file)
-            files[rel] = entry
-        return cls(project_root=str(root), files=files)
+            content = source_file.read_text(encoding="utf-8", errors="replace")
+            backend = get_backend(str(source_file))
+            result = backend.parse_file(str(source_file), content)
+            fhash = _content_hash(content)
 
-    def save(self, state_dir: pathlib.Path) -> None:
-        state_dir.mkdir(parents=True, exist_ok=True)
-        data = {
-            "version": self.version,
-            "project_root": self.project_root,
-            "files": self.files,
-        }
-        index_path = state_dir / "index.json"
-        index_path.write_text(json.dumps(data, indent=2))
+            # Store nodes + edges
+            graph.store_file_nodes_edges(rel, result.symbols, result.edges, fhash)
+
+            # Store aux data (imports, parse_error)
+            imports_json = json.dumps([asdict(i) for i in result.imports])
+            graph._conn.execute(
+                "INSERT OR REPLACE INTO file_aux (file_path, imports_json, parse_error, content_hash) "
+                "VALUES (?, ?, ?, ?)",
+                (rel, imports_json, result.error, fhash),
+            )
+
+        graph.resolve_bare_call_targets()
+        # Store project_root in metadata
+        graph._conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('project_root', ?)",
+            (str(root),),
+        )
+        graph.commit()
+        return cls(project_root=str(root), graph=graph)
 
     @classmethod
     def load(cls, state_dir: pathlib.Path) -> "Index":
-        index_path = state_dir / "index.json"
-        data = json.loads(index_path.read_text())
-        return cls(
-            project_root=data["project_root"],
-            files=data["files"],
-            version=data.get("version", INDEX_VERSION),
-        )
+        db_path = state_dir / "graph.db"
+        if not db_path.exists():
+            raise FileNotFoundError(f"No graph.db in {state_dir}")
+        graph = GraphStore(str(db_path))
+        _ensure_aux_table(graph._conn)
+        # Read project_root from metadata, fall back to deriving from state_dir
+        row = graph._conn.execute(
+            "SELECT value FROM metadata WHERE key = 'project_root'"
+        ).fetchone()
+        root = row[0] if row else str(state_dir.parent)
+        return cls(project_root=root, graph=graph)
+
+    # -- persistence --------------------------------------------------------
+
+    def save(self, state_dir: pathlib.Path) -> None:
+        import sqlite3
+
+        state_dir.mkdir(parents=True, exist_ok=True)
+        self.graph.commit()
+
+        # If the graph DB isn't in state_dir yet, back it up there so that
+        # ``load(state_dir)`` works later.
+        current_db = pathlib.Path(self.graph._conn.execute(
+            "PRAGMA database_list"
+        ).fetchone()[2])
+        target_db = state_dir / "graph.db"
+        if current_db.resolve() != target_db.resolve():
+            dst = sqlite3.connect(str(target_db))
+            self.graph._conn.backup(dst)
+            dst.close()
+
+    # -- refresh ------------------------------------------------------------
 
     def refresh(self, root: pathlib.Path) -> None:
         root = root.resolve()
         gitignore_spec = _load_gitignore(root)
-        current_files = set()
+        current_files: set[str] = set()
+        existing_files = set(self.graph.get_all_files())
+
+        # Also include files that only have aux rows (e.g. parse-error-only files)
+        aux_files = self.graph._conn.execute(
+            "SELECT file_path FROM file_aux"
+        ).fetchall()
+        for row in aux_files:
+            existing_files.add(row[0])
 
         for source_file in _walk_source_files(root, gitignore_spec):
             rel = str(source_file.relative_to(root))
             current_files.add(rel)
-            if rel in self.files:
-                stored_mtime = self.files[rel].get("mtime", 0)
-                actual_mtime = source_file.stat().st_mtime
-                if actual_mtime != stored_mtime:
-                    content = source_file.read_text(encoding="utf-8", errors="replace")
-                    actual_hash = _content_hash(content)
-                    if actual_hash != self.files[rel].get("content_hash"):
-                        self.files[rel] = _parse_and_build_entry(source_file)
-                    else:
-                        self.files[rel]["mtime"] = actual_mtime
-            else:
-                self.files[rel] = _parse_and_build_entry(source_file)
 
-        stale_keys = set(self.files.keys()) - current_files
-        for key in stale_keys:
-            del self.files[key]
+            content = source_file.read_text(encoding="utf-8", errors="replace")
+            actual_hash = _content_hash(content)
+
+            # Check if file changed via content hash
+            aux = self.graph._conn.execute(
+                "SELECT content_hash FROM file_aux WHERE file_path = ?", (rel,)
+            ).fetchone()
+            if aux and aux[0] == actual_hash:
+                continue  # unchanged
+
+            # Re-parse
+            backend = get_backend(str(source_file))
+            result = backend.parse_file(str(source_file), content)
+            self.graph.store_file_nodes_edges(rel, result.symbols, result.edges, actual_hash)
+
+            imports_json = json.dumps([asdict(i) for i in result.imports])
+            self.graph._conn.execute(
+                "INSERT OR REPLACE INTO file_aux (file_path, imports_json, parse_error, content_hash) "
+                "VALUES (?, ?, ?, ?)",
+                (rel, imports_json, result.error, actual_hash),
+            )
+
+        # Remove deleted files
+        for old_file in existing_files - current_files:
+            self.graph.remove_file_data(old_file)
+            self.graph._conn.execute(
+                "DELETE FROM file_aux WHERE file_path = ?", (old_file,)
+            )
+
+        self.graph.resolve_bare_call_targets()
+        self.graph.commit()
+        self._invalidate_cache()
+
+    # -- queries (public API) -----------------------------------------------
 
     def get_symbols(self, rel_path: str) -> list[dict]:
-        if rel_path in self.files:
-            return self.files[rel_path]["symbols"]
-        return []
+        nodes = self.graph.get_nodes_by_file(rel_path)
+        return [_node_to_old_symbol(n) for n in nodes]
 
     def search_symbols(self, name_path: str) -> list[dict]:
+        """Search by name path — same matching logic as before."""
         results = []
         parts = name_path.strip("/").split("/")
 
-        for rel_path, file_data in self.files.items():
-            for symbol in file_data["symbols"]:
+        for rel_path in self.graph.get_all_files():
+            for node in self.graph.get_nodes_by_file(rel_path):
+                sym = _node_to_old_symbol(node)
+                sym["file"] = rel_path
+
                 if len(parts) == 1:
-                    if symbol["name"] == parts[0]:
-                        results.append({**symbol, "file": rel_path})
+                    if sym["name"] == parts[0]:
+                        results.append(sym)
                 elif len(parts) == 2:
-                    parent = symbol.get("parent") or ""
+                    parent = sym.get("parent") or ""
                     parent_match = (
                         parent == parts[0]
                         or parent.endswith("/" + parts[0])
                     )
-                    if symbol["name"] == parts[-1] and parent_match:
-                        results.append({**symbol, "file": rel_path})
+                    if sym["name"] == parts[-1] and parent_match:
+                        results.append(sym)
                 else:
-                    full_path = symbol["name"]
-                    if symbol.get("parent"):
-                        full_path = f"{symbol['parent']}/{symbol['name']}"
+                    full_path = sym["name"]
+                    if sym.get("parent"):
+                        full_path = f"{sym['parent']}/{sym['name']}"
                     if full_path == name_path.strip("/"):
-                        results.append({**symbol, "file": rel_path})
+                        results.append(sym)
 
         return results
 
     def all_symbols(self) -> list[dict]:
         results = []
-        for rel_path, file_data in self.files.items():
-            for symbol in file_data["symbols"]:
-                results.append({**symbol, "file": rel_path})
+        for rel_path in self.graph.get_all_files():
+            for node in self.graph.get_nodes_by_file(rel_path):
+                sym = _node_to_old_symbol(node)
+                sym["file"] = rel_path
+                results.append(sym)
         return results
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers (public — used by other modules)
+# ---------------------------------------------------------------------------
+
 def load_or_build_index(root: pathlib.Path) -> Index:
     state_dir = root / ".ii-structure"
-    index_path = state_dir / "index.json"
+    db_path = state_dir / "graph.db"
 
-    if index_path.exists():
+    # Auto-migration: if old JSON exists but no graph.db, rebuild
+    json_path = state_dir / "index.json"
+    if json_path.exists() and not db_path.exists():
+        idx = Index.build(root)
+        json_path.unlink()
+        return idx
+
+    if db_path.exists():
         try:
             idx = Index.load(state_dir)
             idx.refresh(root)
             idx.save(state_dir)
             return idx
-        except (json.JSONDecodeError, KeyError):
+        except Exception:
             pass
 
     idx = Index.build(root)
