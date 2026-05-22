@@ -187,8 +187,9 @@ class GoBackend:
                 ))
 
     def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
-        """Extract CALLS and IMPORTS edges from the AST."""
+        """Extract CALLS/TESTED_BY and IMPORTS edges from the AST."""
         edges: list[EdgeInfo] = []
+        is_test_file = file_path.endswith("_test.go")
 
         # IMPORTS edges from already-extracted imports
         for imp in imports:
@@ -203,10 +204,15 @@ class GoBackend:
 
         # For each function/method, walk its body for call_expression nodes
         for qn, node in func_nodes:
+            # Determine edge kind based on test file and function name
+            bare_name = qn.rsplit(".", 1)[-1] if "." in qn else qn
+            is_test_func = is_test_file and bare_name.startswith("Test")
+            edge_kind = "TESTED_BY" if is_test_func else "CALLS"
+
             body = node.child_by_field_name("body")
             if not body:
                 continue
-            self._walk_calls(body, source, file_path, qn, edges)
+            self._walk_calls(body, source, file_path, qn, edges, edge_kind)
 
         return edges
 
@@ -230,18 +236,18 @@ class GoBackend:
                             name = f"{recv_type}.{name}"
                     result.append((name, child))
 
-    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo]):
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS"):
         """Recursively walk a node's subtree for call_expression nodes."""
         for child in _get_children(node):
             if child.kind() == "call_expression":
                 call_name = self._get_call_name(child, source)
                 if call_name:
                     edges.append(EdgeInfo(
-                        kind="CALLS", source=enclosing_qn,
+                        kind=edge_kind, source=enclosing_qn,
                         target=call_name, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
-            self._walk_calls(child, source, file_path, enclosing_qn, edges)
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind)
 
     def _get_call_name(self, call_node, source: str) -> str | None:
         """Extract the function/method name from a call_expression node."""

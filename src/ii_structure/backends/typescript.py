@@ -245,8 +245,15 @@ class TypeScriptBackend:
                     ))
 
     def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
-        """Extract CALLS and IMPORTS edges from the AST."""
+        """Extract CALLS/TESTED_BY and IMPORTS edges from the AST."""
         edges: list[EdgeInfo] = []
+
+        # Detect test files
+        is_test_file = any(file_path.endswith(ext) for ext in
+            ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js'])
+        if not is_test_file:
+            name = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+            is_test_file = name.startswith("test_") or "/__tests__/" in file_path
 
         # IMPORTS edges from already-extracted imports
         for imp in imports:
@@ -260,10 +267,15 @@ class TypeScriptBackend:
         self._collect_func_nodes(root, source, func_nodes, parent_class=None)
 
         for qn, node in func_nodes:
+            # Determine edge kind based on test file and function name
+            bare_name = qn.rsplit(".", 1)[-1] if "." in qn else qn
+            is_test_func = is_test_file and (bare_name.startswith("test") or bare_name.startswith("Test"))
+            edge_kind = "TESTED_BY" if is_test_func else "CALLS"
+
             body = node.child_by_field_name("body")
             if not body:
                 continue
-            self._walk_calls(body, source, file_path, qn, edges)
+            self._walk_calls(body, source, file_path, qn, edges, edge_kind)
 
         return edges
 
@@ -308,7 +320,7 @@ class TypeScriptBackend:
                         qn = f"{class_name}.{name}"
                     result.append((qn, child))
 
-    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo]):
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS"):
         """Recursively walk a node's subtree for call/new expressions."""
         for child in _get_children(node):
             kind = child.kind()
@@ -316,7 +328,7 @@ class TypeScriptBackend:
                 call_name = self._get_call_name(child, source)
                 if call_name:
                     edges.append(EdgeInfo(
-                        kind="CALLS", source=enclosing_qn,
+                        kind=edge_kind, source=enclosing_qn,
                         target=call_name, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
@@ -324,11 +336,11 @@ class TypeScriptBackend:
                 call_name = self._get_new_name(child, source)
                 if call_name:
                     edges.append(EdgeInfo(
-                        kind="CALLS", source=enclosing_qn,
+                        kind=edge_kind, source=enclosing_qn,
                         target=call_name, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
-            self._walk_calls(child, source, file_path, enclosing_qn, edges)
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind)
 
     def _get_call_name(self, call_node, source: str) -> str | None:
         """Extract function/method name from a call_expression node."""
