@@ -81,8 +81,11 @@ class GraphStore:
         )
 
     def close(self) -> None:
+        if self._conn is None:
+            return
         self._conn.commit()
         self._conn.close()
+        self._conn = None
 
     def __enter__(self) -> GraphStore:
         return self
@@ -94,7 +97,9 @@ class GraphStore:
 
     @staticmethod
     def _make_qualified(name: str, file_path: str, parent: str | None) -> str:
+        name = _sanitize_name(name)
         if parent:
+            parent = _sanitize_name(parent)
             return f"{file_path}::{parent}.{name}"
         return f"{file_path}::{name}"
 
@@ -153,6 +158,16 @@ class GraphStore:
         line: int = 0,
     ) -> int:
         now = time.time()
+        existing = self._conn.execute(
+            "SELECT id FROM edges WHERE kind=? AND source_qualified=? AND target_qualified=? AND file_path=? AND line=?",
+            (kind, source_qualified, target_qualified, file_path, line),
+        ).fetchone()
+        if existing:
+            self._conn.execute(
+                "UPDATE edges SET updated_at=? WHERE id=?",
+                (now, existing["id"]),
+            )
+            return existing["id"]
         cur = self._conn.execute(
             """\
             INSERT INTO edges (kind, source_qualified, target_qualified,
@@ -197,6 +212,12 @@ class GraphStore:
             raise
 
     def commit(self) -> None:
+        """Flush pending writes.
+
+        With ``isolation_level=None`` (autocommit), individual operations
+        commit automatically.  This method only has an effect after an
+        explicit ``BEGIN`` transaction block.
+        """
         self._conn.commit()
 
     # ---- read operations ----
