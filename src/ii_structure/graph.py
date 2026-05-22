@@ -263,3 +263,234 @@ class GraphStore:
         nodes = self._conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         edges = self._conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         return {"total_nodes": nodes, "total_edges": edges}
+
+    # ---- analysis queries ----
+
+    def get_impact_radius(
+        self,
+        qualified_name: str,
+        max_depth: int = 3,
+        max_nodes: int = 200,
+    ) -> dict[str, Any]:
+        """Blast radius via recursive CTE."""
+        seed = self.get_node(qualified_name)
+        if seed is None:
+            return {
+                "changed_node": None,
+                "impacted_nodes": [],
+                "impacted_files": [],
+                "total_impacted": 0,
+            }
+
+        self._conn.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS _impact_seeds (qn TEXT)"
+        )
+        self._conn.execute("DELETE FROM _impact_seeds")
+        self._conn.execute(
+            "INSERT INTO _impact_seeds (qn) VALUES (?)", (qualified_name,)
+        )
+
+        rows = self._conn.execute(
+            """\
+            WITH RECURSIVE impacted(node_qn, depth) AS (
+                SELECT qn, 0 FROM _impact_seeds
+                UNION
+                SELECT e.source_qualified, i.depth + 1
+                FROM impacted i JOIN edges e ON e.target_qualified = i.node_qn
+                WHERE i.depth < ?
+                UNION
+                SELECT e.target_qualified, i.depth + 1
+                FROM impacted i JOIN edges e ON e.source_qualified = i.node_qn
+                WHERE i.depth < ?
+            )
+            SELECT DISTINCT node_qn, MIN(depth) AS min_depth
+            FROM impacted GROUP BY node_qn LIMIT ?
+            """,
+            (max_depth, max_depth, max_nodes),
+        ).fetchall()
+
+        impacted_nodes: list[dict[str, Any]] = []
+        impacted_files: set[str] = set()
+        for row in rows:
+            qn = row["node_qn"]
+            depth = row["min_depth"]
+            if qn == qualified_name:
+                continue
+            node = self.get_node(qn)
+            if node is not None:
+                node["depth"] = depth
+                impacted_nodes.append(node)
+                impacted_files.add(node["file_path"])
+
+        self._conn.execute("DROP TABLE IF EXISTS _impact_seeds")
+
+        return {
+            "changed_node": seed,
+            "impacted_nodes": impacted_nodes,
+            "impacted_files": sorted(impacted_files),
+            "total_impacted": len(impacted_nodes),
+        }
+
+    def get_dead_symbols(
+        self, file_path: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Find function/method nodes with zero incoming CALLS edges."""
+        cur = self._conn.execute(
+            """\
+            SELECT n.* FROM nodes n
+            WHERE n.kind IN ('function', 'method')
+            AND n.qualified_name NOT IN (
+                SELECT target_qualified FROM edges WHERE kind = 'CALLS'
+            )
+            """
+        )
+        excluded_names = {"main", "__main__", "__init__", "setup", "teardown"}
+        results: list[dict[str, Any]] = []
+        for row in cur.fetchall():
+            d = dict(row)
+            name = d["name"]
+            fp = d["file_path"]
+            if name.startswith("test_"):
+                continue
+            if name in excluded_names:
+                continue
+            base = fp.rsplit("/", 1)[-1] if "/" in fp else fp
+            if base.startswith("test_") or "/test_" in fp:
+                continue
+            if file_path is not None and d["file_path"] != file_path:
+                continue
+            results.append(d)
+        return results
+
+    def get_transitive_tests(
+        self, qualified_name: str, max_depth: int = 2
+    ) -> list[dict[str, Any]]:
+        """Find test coverage (direct and transitive)."""
+        tests: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        # Direct: TESTED_BY edges targeting this node
+        direct_edges = self._conn.execute(
+            "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
+            (qualified_name,),
+        ).fetchall()
+        for row in direct_edges:
+            src_qn = row["source_qualified"]
+            if src_qn in seen:
+                continue
+            seen.add(src_qn)
+            node = self.get_node(src_qn)
+            if node is not None:
+                node["indirect"] = False
+                tests.append(node)
+
+        # Transitive: BFS callers up to max_depth, then collect TESTED_BY
+        frontier = {qualified_name}
+        for _depth in range(max_depth):
+            next_frontier: set[str] = set()
+            for qn in frontier:
+                callers = self._conn.execute(
+                    "SELECT source_qualified FROM edges WHERE kind = 'CALLS' AND target_qualified = ?",
+                    (qn,),
+                ).fetchall()
+                for crow in callers:
+                    caller_qn = crow["source_qualified"]
+                    if caller_qn in seen:
+                        continue
+                    next_frontier.add(caller_qn)
+                    # Check if this caller has TESTED_BY edges
+                    tested_edges = self._conn.execute(
+                        "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
+                        (caller_qn,),
+                    ).fetchall()
+                    for trow in tested_edges:
+                        test_qn = trow["source_qualified"]
+                        if test_qn in seen:
+                            continue
+                        seen.add(test_qn)
+                        node = self.get_node(test_qn)
+                        if node is not None:
+                            node["indirect"] = True
+                            tests.append(node)
+            frontier = next_frontier
+
+        return tests
+
+    def search_nodes(
+        self, query: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """LIKE-based substring search on name, qualified_name, docstring."""
+        pattern = f"%{query.lower()}%"
+        cur = self._conn.execute(
+            """\
+            SELECT * FROM nodes
+            WHERE LOWER(name) LIKE ?
+               OR LOWER(qualified_name) LIKE ?
+               OR LOWER(docstring) LIKE ?
+            LIMIT ?
+            """,
+            (pattern, pattern, pattern, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def resolve_bare_call_targets(self) -> int:
+        """Post-processing pass to resolve bare call targets."""
+        # Find bare CALLS edges
+        bare_edges = self._conn.execute(
+            "SELECT id, source_qualified, target_qualified, file_path "
+            "FROM edges WHERE kind = 'CALLS' AND target_qualified NOT LIKE '%::%'"
+        ).fetchall()
+
+        if not bare_edges:
+            return 0
+
+        # Build name → [qualified_names] lookup
+        all_nodes = self._conn.execute(
+            "SELECT name, qualified_name, file_path FROM nodes"
+        ).fetchall()
+        name_to_qns: dict[str, list[tuple[str, str]]] = {}
+        for row in all_nodes:
+            name_to_qns.setdefault(row["name"], []).append(
+                (row["qualified_name"], row["file_path"])
+            )
+
+        # Build import map: source_file → set[imported_files]
+        import_edges = self._conn.execute(
+            "SELECT source_qualified, target_qualified, file_path FROM edges WHERE kind = 'IMPORTS'"
+        ).fetchall()
+        file_imports: dict[str, set[str]] = {}
+        for row in import_edges:
+            src_file = row["file_path"]
+            tgt_qn = row["target_qualified"]
+            if "::" in tgt_qn:
+                tgt_file = tgt_qn.split("::")[0]
+                file_imports.setdefault(src_file, set()).add(tgt_file)
+
+        resolved = 0
+        for edge in bare_edges:
+            bare_name = edge["target_qualified"]
+            candidates = name_to_qns.get(bare_name, [])
+            if not candidates:
+                continue
+
+            if len(candidates) == 1:
+                self._conn.execute(
+                    "UPDATE edges SET target_qualified = ? WHERE id = ?",
+                    (candidates[0][0], edge["id"]),
+                )
+                resolved += 1
+            else:
+                # Try to disambiguate via imports
+                caller_file = edge["file_path"]
+                imported_files = file_imports.get(caller_file, set())
+                matching = [
+                    (qn, fp) for qn, fp in candidates if fp in imported_files
+                ]
+                if len(matching) == 1:
+                    self._conn.execute(
+                        "UPDATE edges SET target_qualified = ? WHERE id = ?",
+                        (matching[0][0], edge["id"]),
+                    )
+                    resolved += 1
+
+        return resolved
