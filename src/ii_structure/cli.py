@@ -243,6 +243,57 @@ def insert_symbol(ctx, after_symbol, before_symbol, file_hint, expect_hash):
         sys.exit(1)
 
 
+@cli.command("blast-radius")
+@click.argument("name")
+@click.option("--depth", type=int, default=3, help="Max traversal depth")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def blast_radius(ctx, name, depth, file_hint):
+    """Show what's affected if a symbol changes."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.blast_radius import execute
+        result = execute(idx=idx, project_root=str(ctx.obj["root"]),
+                        name=name, max_depth=depth, file_hint=file_hint)
+        click.echo(format_success("blast-radius", result))
+    except Exception as e:
+        click.echo(format_error("blast-radius", str(e)))
+        sys.exit(1)
+
+
+@cli.command("dead-code")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def dead_code(ctx, file_hint):
+    """Find symbols with no callers (potentially dead code)."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.dead_code import execute
+        result = execute(idx=idx, file_hint=file_hint)
+        click.echo(format_success("dead-code", result))
+    except Exception as e:
+        click.echo(format_error("dead-code", str(e)))
+        sys.exit(1)
+
+
+@cli.command("test-coverage")
+@click.argument("name")
+@click.option("--depth", type=int, default=2, help="Max depth for transitive test discovery")
+@click.option("--file", "file_hint", default=None, help="Restrict to a specific file")
+@click.pass_context
+def test_coverage(ctx, name, depth, file_hint):
+    """Show structural test coverage for a symbol."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.test_coverage import execute
+        result = execute(idx=idx, project_root=str(ctx.obj["root"]),
+                        name=name, max_depth=depth, file_hint=file_hint)
+        click.echo(format_success("test-coverage", result))
+    except Exception as e:
+        click.echo(format_error("test-coverage", str(e)))
+        sys.exit(1)
+
+
 @cli.command(name="imports")
 @click.argument("file")
 @click.option("--depth", type=int, default=1, help="Hop distance")
@@ -340,21 +391,18 @@ def benchmark_compare(ctx, baseline_file):
 
 CLAUDE_MD_SECTION = """\
 
-# ii-structure — MANDATORY for Code Navigation and Editing
+# ii-structure — MANDATORY for Code Navigation, Editing, and Analysis
 
-You have `ii-structure` installed. It provides structural code navigation and symbol-level editing that uses 3-15x fewer tokens than Read/Grep/Glob.
+You have `ii-structure` installed. It provides structural code navigation, symbol-level editing, and impact analysis. Uses 3-15x fewer tokens than Read/Grep/Glob.
 
 ## HARD RULES — Violations Waste Tokens
 
-1. **NEVER read a source file to find a function.** Use `ii-structure body Symbol/name` instead. Reading a 500-line file to find a 10-line function wastes 490 lines of tokens.
-
-2. **NEVER grep for a symbol definition.** Use `ii-structure locate Name` or `ii-structure search query`. Grep returns noise — imports, type hints, comments, string literals. ii-structure returns only definitions.
-
-3. **NEVER read a whole file to understand its structure.** Use `ii-structure outline file.py --depth full`. This returns the skeleton in ~100 tokens instead of ~2000.
-
-4. **NEVER use Read + Edit to rewrite a function.** Use `ii-structure body Name` to read (get the content_hash), then pipe new code to `ii-structure replace-body Name --expect-hash <hash>`. This is safer (hash verification) and cheaper (no old_str needed).
-
-5. **ALWAYS start with `ii-structure files --summary`** on any new or unfamiliar project. This is your project map — every file with its top-level symbols.
+1. **NEVER read a source file to find a function.** Use `ii-structure body Symbol/name`. Reading a 500-line file to find a 10-line function wastes 490 lines of tokens.
+2. **NEVER grep for a symbol definition.** Use `ii-structure locate Name` or `ii-structure search query`. Grep returns noise — ii-structure returns only definitions.
+3. **NEVER read a whole file to understand its structure.** Use `ii-structure outline file.py --depth full`. Returns the skeleton in ~100 tokens instead of ~2000.
+4. **NEVER use Read + Edit to rewrite a function.** Use `ii-structure body Name` (get hash) → `ii-structure replace-body Name --expect-hash <hash>`.
+5. **ALWAYS run `ii-structure files --summary`** on any new or unfamiliar project.
+6. **ALWAYS run `ii-structure blast-radius Name`** before refactoring to understand impact.
 
 ## Decision Tree — What Tool To Use
 
@@ -362,51 +410,57 @@ You have `ii-structure` installed. It provides structural code navigation and sy
 I need to...
 ├── READ code
 │   ├── Know the symbol name? → ii-structure body Symbol/name
-│   ├── Know the file but not what is in it? → ii-structure outline file.py
+│   ├── Know the file? → ii-structure outline file.py
 │   ├── Don't know the name? → ii-structure search <query>
-│   └── Need a string literal, comment, or regex? → Grep (this is the ONLY case)
+│   └── Need a string literal or regex? → Grep (ONLY case)
 │
 ├── FIND something
-│   ├── Where is a class/function defined? → ii-structure locate Name
-│   ├── Who calls this function? → ii-structure usages Name
+│   ├── Where is it defined? → ii-structure locate Name
+│   ├── Who calls it? → ii-structure usages Name
 │   ├── What depends on this file? → ii-structure imports file.py
-│   └── Looking for a filename pattern? → Glob (this is the ONLY case)
+│   └── Looking for a filename? → Glob (ONLY case)
+│
+├── ANALYZE impact
+│   ├── What breaks if I change X? → ii-structure blast-radius X
+│   ├── Is there dead code? → ii-structure dead-code [--file FILE]
+│   └── Is X tested? → ii-structure test-coverage X
 │
 ├── WRITE code
-│   ├── Rewrite a function/method/class?
-│   │   1. ii-structure body Name → get source + content_hash
+│   ├── Rewrite a function/method?
+│   │   1. ii-structure body Name → get content_hash
 │   │   2. echo 'new code' | ii-structure replace-body Name --expect-hash <hash>
-│   ├── Add a new function next to an existing one?
+│   ├── Add new code next to a symbol?
 │   │   1. ii-structure body AnchorName → get content_hash
 │   │   2. echo 'new code' | ii-structure insert-symbol --after AnchorName --expect-hash <hash>
-│   └── Change a string literal, comment, or non-symbol code? → Edit tool
+│   └── Non-symbol edit? → Edit tool
 │
 └── UNDERSTAND the project
-    ├── What files exist? → ii-structure files --summary
-    ├── What is in this file? → ii-structure outline file.py --depth full
-    └── What are the dependencies? → ii-structure imports file.py
+    ├── Project overview? → ii-structure files --summary
+    ├── File structure? → ii-structure outline file.py --depth full
+    └── Dependencies? → ii-structure imports file.py
 ```
 
 ## When Native Tools ARE Correct
 
 - `Glob` — finding files by name pattern (NOT for finding code)
-- `Grep` — searching for string literals, TODOs, comments, regex patterns (NOT for finding symbols)
-- `Read` — reading non-code files (config, docs, .gitignore) or a specific line range you already know
-- `Edit/Write` — line-level edits to non-symbol code (string changes, config edits)
+- `Grep` — string literals, TODOs, comments, regex (NOT for finding symbols)
+- `Read` — non-code files (config, docs) or specific line ranges you already know
+- `Edit/Write` — non-symbol edits (string changes, config)
 
 ## Key Flags
 
-- `--expect-hash` on `replace-body`/`insert-symbol` — pass the content_hash from `body` to prevent stale writes
-- `--no-tests` on `usages` — exclude test files when exploring (include when refactoring)
+- `--expect-hash` on write commands — content_hash from `body`, prevents stale writes
+- `--depth N` on `blast-radius` — traversal depth (default 3)
+- `--no-tests` on `usages` — exclude test files when exploring
 - `--depth full` on `outline` — include methods inside classes
-- `--kind class|function|method` on `locate`/`outline` — filter by type
+- `--kind` on `locate`/`outline` — filter by type
 - `--match substring` on `locate` — partial name matching
-- `--file` on `body`/`replace-body`/`insert-symbol` — disambiguate when multiple symbols share a name
+- `--file` on any command — disambiguate when symbols share names
 
 ## Workflow
 
 ```
-New project → files --summary → outline interesting files → locate/body specific symbols → usages for impact → replace-body/insert-symbol to edit
+New project → files --summary → outline → locate/body → blast-radius before refactoring → replace-body to edit → usages to verify
 ```
 """
 

@@ -1,9 +1,7 @@
 from __future__ import annotations
 import pathlib
-import shutil
 from tree_sitter_language_pack import get_parser
-from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
-from ii_structure.lsp_client import LspClient
+from ii_structure.parser import SymbolInfo, ImportInfo, EdgeInfo, ParseResult
 
 
 class GoBackend:
@@ -12,7 +10,7 @@ class GoBackend:
 
     def parse_file(self, file_path: str, source: str) -> ParseResult:
         if not source.strip():
-            return ParseResult(symbols=[], imports=[], error=None)
+            return ParseResult(symbols=[], imports=[], edges=[], error=None)
 
         tree = self._parser.parse(source)
         root = tree.root_node()
@@ -21,11 +19,13 @@ class GoBackend:
             # Check if it's a meaningful parse or just errors
             symbols, imports = self._extract(root, source)
             if not symbols and not imports:
-                return ParseResult(symbols=[], imports=[], error=f"Syntax error in {file_path}")
-            return ParseResult(symbols=symbols, imports=imports, error=f"Syntax error in {file_path}")
+                return ParseResult(symbols=[], imports=[], edges=[], error=f"Syntax error in {file_path}")
+            edges = self._extract_edges(root, source, file_path, symbols, imports)
+            return ParseResult(symbols=symbols, imports=imports, edges=edges, error=f"Syntax error in {file_path}")
 
         symbols, imports = self._extract(root, source)
-        return ParseResult(symbols=symbols, imports=imports, error=None)
+        edges = self._extract_edges(root, source, file_path, symbols, imports)
+        return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
     def _extract(self, root, source: str) -> tuple[list[SymbolInfo], list[ImportInfo]]:
         symbols: list[SymbolInfo] = []
@@ -186,64 +186,109 @@ class GoBackend:
                     parent=None,
                 ))
 
+    def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
+        """Extract CALLS/TESTED_BY and IMPORTS edges from the AST."""
+        edges: list[EdgeInfo] = []
+        is_test_file = file_path.endswith("_test.go")
+
+        # Build same-file resolution lookup from already-extracted symbols
+        defined_names: dict[str, str] = {}
+        for sym in symbols:
+            if sym.kind in ("function", "method", "class", "interface"):
+                if sym.parent:
+                    qn = f"{file_path}::{sym.parent}.{sym.name}"
+                else:
+                    qn = f"{file_path}::{sym.name}"
+                defined_names[sym.name] = qn
+
+        # IMPORTS edges from already-extracted imports
+        for imp in imports:
+            edges.append(EdgeInfo(
+                kind="IMPORTS", source=file_path,
+                target=imp.module, file_path=file_path, line=imp.line,
+            ))
+
+        # Build function/method nodes for walking calls
+        func_nodes = []
+        self._collect_func_nodes(root, source, func_nodes)
+
+        # For each function/method, walk its body for call_expression nodes
+        for qn, node in func_nodes:
+            # Determine edge kind based on test file and function name
+            bare_name = qn.rsplit(".", 1)[-1] if "." in qn else qn
+            is_test_func = is_test_file and bare_name.startswith("Test")
+            edge_kind = "TESTED_BY" if is_test_func else "CALLS"
+
+            body = node.child_by_field_name("body")
+            if not body:
+                continue
+            self._walk_calls(body, source, file_path, qn, edges, edge_kind, defined_names)
+
+        return edges
+
+    def _collect_func_nodes(self, root, source: str, result: list):
+        """Collect (qualified_name, node) for all function/method declarations."""
+        for child in _get_children(root):
+            kind = child.kind()
+            if kind == "function_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    result.append((name, child))
+            elif kind == "method_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    receiver = child.child_by_field_name("receiver")
+                    if receiver:
+                        recv_type = _extract_receiver_type(_get_text(receiver, source))
+                        if recv_type:
+                            name = f"{recv_type}.{name}"
+                    result.append((name, child))
+
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None, _depth: int = 0):
+        """Recursively walk a node's subtree for call_expression nodes."""
+        if _depth > 180:
+            return
+        for child in _get_children(node):
+            if child.kind() == "call_expression":
+                call_name = self._get_call_name(child, source)
+                if call_name:
+                    # Resolve to qualified name if defined in same file
+                    target = call_name
+                    if defined_names:
+                        if call_name in defined_names:
+                            target = defined_names[call_name]
+                        elif "." in call_name:
+                            method_part = call_name.rsplit(".", 1)[-1]
+                            if method_part in defined_names:
+                                target = defined_names[method_part]
+                    edges.append(EdgeInfo(
+                        kind=edge_kind, source=enclosing_qn,
+                        target=target, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names, _depth + 1)
+
+    def _get_call_name(self, call_node, source: str) -> str | None:
+        """Extract the function/method name from a call_expression node."""
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return None
+        kind = func_node.kind()
+        if kind == "identifier":
+            return _get_text(func_node, source)
+        if kind == "selector_expression":
+            # obj.Method() — return full receiver.method (e.g. "http.Get", "s.Init")
+            return _get_text(func_node, source)
+        return None
+
     def _attach_methods_to_types(self, symbols: list[SymbolInfo]):
         type_map = {s.name: s for s in symbols if s.kind in ("class", "interface")}
         for s in symbols:
             if s.kind == "method" and s.parent and s.parent in type_map:
                 if s.name not in type_map[s.parent].children:
                     type_map[s.parent].children.append(s.name)
-
-    def find_usages(self, project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-        if not shutil.which("gopls"):
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-        # Try LSP-based resolution
-        root = pathlib.Path(project_root)
-        candidates = index.search_symbols(name)
-        if not candidates:
-            return []
-
-        try:
-            lsp = LspClient(command=["gopls", "serve"], project_root=project_root)
-            candidate = candidates[0]
-            file_path = str(root / candidate["file"])
-            content = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
-            lsp.open_document(file_path, content, language_id="go")
-
-            col = _find_name_column(content, candidate["line"], candidate["name"])
-            refs = lsp.find_references(file_path, candidate["line"] - 1, col)
-            lsp.shutdown()
-
-            if not refs:
-                return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-            results = []
-            seen = set()
-            for ref in refs:
-                try:
-                    rel = str(pathlib.Path(ref["file"]).relative_to(root))
-                except ValueError:
-                    continue
-                if path_scope and not rel.startswith(path_scope):
-                    continue
-                if not include_tests and _is_test_file(rel):
-                    continue
-                key = (rel, ref["line"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                context = _get_context_line(root / rel, ref["line"])
-                results.append({
-                    "file": rel,
-                    "line": ref["line"],
-                    "kind": "reference",
-                    "context": context,
-                })
-                if len(results) >= limit:
-                    break
-            return results
-        except Exception:
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
 
     def get_definition_source(self, project_root, name, index, file_hint=None):
         return _index_based_definition(project_root, name, index, file_hint)
@@ -278,57 +323,6 @@ def _extract_receiver_type(receiver_text: str) -> str | None:
     elif len(parts) == 1:
         return parts[0].lstrip("*")
     return None
-
-
-def _find_name_column(source: str, line: int, name: str) -> int:
-    lines = source.splitlines()
-    if 0 < line <= len(lines):
-        idx = lines[line - 1].find(name)
-        if idx >= 0:
-            return idx
-    return 0
-
-
-def _is_test_file(path: str) -> bool:
-    parts = path.split("/")
-    filename = parts[-1]
-    return filename.endswith("_test.go") or any(p == "test" for p in parts[:-1])
-
-
-def _get_context_line(file_path: pathlib.Path, line: int) -> str:
-    try:
-        source = file_path.read_text(encoding="utf-8", errors="replace")
-        lines = source.splitlines()
-        if 0 < line <= len(lines):
-            return lines[line - 1].strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _index_based_usages(project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-    root = pathlib.Path(project_root)
-    candidates = index.search_symbols(name)
-    results = []
-    for candidate in candidates:
-        rel = candidate["file"]
-        if path_scope and not rel.startswith(path_scope):
-            continue
-        if not include_tests and _is_test_file(rel):
-            continue
-        usage_kind = "definition"
-        if kind_filter and usage_kind != kind_filter:
-            continue
-        context = _get_context_line(root / rel, candidate["line"])
-        results.append({
-            "file": rel,
-            "line": candidate["line"],
-            "kind": usage_kind,
-            "context": context,
-        })
-        if len(results) >= limit:
-            break
-    return results
 
 
 def _index_based_definition(project_root, name, index, file_hint=None):

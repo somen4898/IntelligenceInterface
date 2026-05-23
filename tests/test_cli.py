@@ -95,7 +95,7 @@ def test_project_flag(project_with_root):
 def test_no_cache_flag(project_with_root):
     # First run builds cache
     run_cli("locate", "User", cwd=project_with_root)
-    assert (project_with_root / ".ii-structure" / "index.json").exists()
+    assert (project_with_root / ".ii-structure" / "graph.db").exists()
 
     # Second run with --no-cache rebuilds
     result = run_cli("--no-cache", "locate", "User", cwd=project_with_root)

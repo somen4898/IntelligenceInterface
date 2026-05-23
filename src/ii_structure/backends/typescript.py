@@ -1,9 +1,7 @@
 from __future__ import annotations
 import pathlib
-import shutil
 from tree_sitter_language_pack import get_parser
-from ii_structure.parser import SymbolInfo, ImportInfo, ParseResult
-from ii_structure.lsp_client import LspClient
+from ii_structure.parser import SymbolInfo, ImportInfo, EdgeInfo, ParseResult
 
 
 class TypeScriptBackend:
@@ -13,7 +11,7 @@ class TypeScriptBackend:
 
     def parse_file(self, file_path: str, source: str) -> ParseResult:
         if not source.strip():
-            return ParseResult(symbols=[], imports=[], error=None)
+            return ParseResult(symbols=[], imports=[], edges=[], error=None)
 
         parser = self._tsx_parser if file_path.endswith(".tsx") else self._ts_parser
         tree = parser.parse(source)
@@ -22,11 +20,13 @@ class TypeScriptBackend:
         if root.has_error():
             symbols, imports = self._extract(root, source)
             if not symbols and not imports:
-                return ParseResult(symbols=[], imports=[], error=f"Syntax error in {file_path}")
-            return ParseResult(symbols=symbols, imports=imports, error=f"Syntax error in {file_path}")
+                return ParseResult(symbols=[], imports=[], edges=[], error=f"Syntax error in {file_path}")
+            edges = self._extract_edges(root, source, file_path, symbols, imports)
+            return ParseResult(symbols=symbols, imports=imports, edges=edges, error=f"Syntax error in {file_path}")
 
         symbols, imports = self._extract(root, source)
-        return ParseResult(symbols=symbols, imports=imports, error=None)
+        edges = self._extract_edges(root, source, file_path, symbols, imports)
+        return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
     def _extract(self, root, source: str) -> tuple[list[SymbolInfo], list[ImportInfo]]:
         symbols: list[SymbolInfo] = []
@@ -244,6 +244,162 @@ class TypeScriptBackend:
                         parent=None,
                     ))
 
+    def _extract_edges(self, root, source: str, file_path: str, symbols: list[SymbolInfo], imports: list[ImportInfo]) -> list[EdgeInfo]:
+        """Extract CALLS/TESTED_BY and IMPORTS edges from the AST."""
+        edges: list[EdgeInfo] = []
+
+        # Detect test files
+        is_test_file = any(file_path.endswith(ext) for ext in
+            ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js'])
+        if not is_test_file:
+            name = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+            is_test_file = name.startswith("test_") or "/__tests__/" in file_path
+
+        # Build same-file resolution lookup from already-extracted symbols
+        defined_names: dict[str, str] = {}
+        for sym in symbols:
+            if sym.kind in ("function", "method", "class", "interface"):
+                if sym.parent:
+                    qn = f"{file_path}::{sym.parent}.{sym.name}"
+                else:
+                    qn = f"{file_path}::{sym.name}"
+                defined_names[sym.name] = qn
+
+        # IMPORTS edges from already-extracted imports
+        for imp in imports:
+            edges.append(EdgeInfo(
+                kind="IMPORTS", source=file_path,
+                target=imp.module, file_path=file_path, line=imp.line,
+            ))
+
+        # Collect function/method nodes for walking calls
+        func_nodes: list[tuple[str, object]] = []
+        self._collect_func_nodes(root, source, func_nodes, parent_class=None)
+
+        for qn, node in func_nodes:
+            # Determine edge kind based on test file and function name
+            bare_name = qn.rsplit(".", 1)[-1] if "." in qn else qn
+            is_test_func = is_test_file and (bare_name.startswith("test") or bare_name.startswith("Test"))
+            edge_kind = "TESTED_BY" if is_test_func else "CALLS"
+
+            body = node.child_by_field_name("body")
+            if not body:
+                continue
+            self._walk_calls(body, source, file_path, qn, edges, edge_kind, defined_names)
+
+        return edges
+
+    def _collect_func_nodes(self, root, source: str, result: list, parent_class: str | None):
+        """Collect (qualified_name, node) for all function/method declarations."""
+        for child in _get_children(root):
+            kind = child.kind()
+            if kind == "function_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    result.append((name, child))
+            elif kind == "class_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    class_name = _get_text(name_node, source)
+                    body = child.child_by_field_name("body")
+                    if body:
+                        self._collect_class_methods(body, source, result, class_name)
+            elif kind == "export_statement":
+                self._collect_func_nodes(child, source, result, parent_class)
+            elif kind == "lexical_declaration":
+                # Arrow functions: const foo = (...) => { ... }
+                for sub in _get_children(child):
+                    if sub.kind() == "variable_declarator":
+                        name_node = sub.child_by_field_name("name")
+                        value_node = sub.child_by_field_name("value")
+                        if name_node and value_node and value_node.kind() == "arrow_function":
+                            name = _get_text(name_node, source)
+                            result.append((name, value_node))
+
+    def _collect_class_methods(self, body, source: str, result: list, class_name: str):
+        """Collect methods from a class body."""
+        for child in _get_children(body):
+            if child.kind() == "method_definition":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    name = _get_text(name_node, source)
+                    if name != "constructor":
+                        qn = f"{class_name}.{name}"
+                    else:
+                        qn = f"{class_name}.{name}"
+                    result.append((qn, child))
+
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None, _depth: int = 0):
+        """Recursively walk a node's subtree for call/new/JSX expressions."""
+        if _depth > 180:
+            return
+        for child in _get_children(node):
+            kind = child.kind()
+            if kind == "call_expression":
+                call_name = self._get_call_name(child, source)
+                if call_name:
+                    target = self._resolve_call_name(call_name, defined_names)
+                    edges.append(EdgeInfo(
+                        kind=edge_kind, source=enclosing_qn,
+                        target=target, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            elif kind == "new_expression":
+                call_name = self._get_new_name(child, source)
+                if call_name:
+                    target = self._resolve_call_name(call_name, defined_names)
+                    edges.append(EdgeInfo(
+                        kind=edge_kind, source=enclosing_qn,
+                        target=target, file_path=file_path,
+                        line=child.start_position().row + 1,
+                    ))
+            elif kind in ("jsx_self_closing_element", "jsx_opening_element"):
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    component_name = _get_text(name_node, source)
+                    # Only track PascalCase names (components, not HTML elements)
+                    if component_name and component_name[0].isupper():
+                        target = defined_names.get(component_name, component_name) if defined_names else component_name
+                        edges.append(EdgeInfo(
+                            kind=edge_kind, source=enclosing_qn,
+                            target=target, file_path=file_path,
+                            line=child.start_position().row + 1,
+                        ))
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names, _depth + 1)
+
+    def _resolve_call_name(self, call_name: str, defined_names: dict[str, str] | None) -> str:
+        """Resolve a call name to its qualified form using defined_names."""
+        if not defined_names:
+            return call_name
+        if call_name in defined_names:
+            return defined_names[call_name]
+        if "." in call_name:
+            method_part = call_name.rsplit(".", 1)[-1]
+            if method_part in defined_names:
+                return defined_names[method_part]
+        return call_name
+
+    def _get_call_name(self, call_node, source: str) -> str | None:
+        """Extract function/method name from a call_expression node."""
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return None
+        kind = func_node.kind()
+        if kind == "identifier":
+            return _get_text(func_node, source)
+        if kind == "member_expression":
+            # Return full object.property (e.g. "this.validate", "router.get")
+            return _get_text(func_node, source)
+        return None
+
+    def _get_new_name(self, new_node, source: str) -> str | None:
+        """Extract constructor name from a new_expression node."""
+        constructor = new_node.child_by_field_name("constructor")
+        if constructor and constructor.kind() == "identifier":
+            return _get_text(constructor, source)
+        return None
+
     def _extract_import(self, node, source: str, imports):
         module = None
         names = []
@@ -269,59 +425,6 @@ class TypeScriptBackend:
                 line=node.start_position().row + 1,
                 is_relative=module.startswith("."),
             ))
-
-    def find_usages(self, project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-        if not shutil.which("typescript-language-server"):
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-        # Try LSP-based resolution
-        root = pathlib.Path(project_root)
-        candidates = index.search_symbols(name)
-        if not candidates:
-            return []
-
-        try:
-            lsp = LspClient(command=["typescript-language-server", "--stdio"], project_root=project_root)
-            candidate = candidates[0]
-            file_path = str(root / candidate["file"])
-            content = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
-            lang_id = "typescriptreact" if file_path.endswith(".tsx") else "typescript"
-            lsp.open_document(file_path, content, language_id=lang_id)
-
-            col = _find_name_column(content, candidate["line"], candidate["name"])
-            refs = lsp.find_references(file_path, candidate["line"] - 1, col)
-            lsp.shutdown()
-
-            if not refs:
-                return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
-
-            results = []
-            seen = set()
-            for ref in refs:
-                try:
-                    rel = str(pathlib.Path(ref["file"]).relative_to(root))
-                except ValueError:
-                    continue
-                if path_scope and not rel.startswith(path_scope):
-                    continue
-                if not include_tests and _is_test_file(rel):
-                    continue
-                key = (rel, ref["line"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                context = _get_context_line(root / rel, ref["line"])
-                results.append({
-                    "file": rel,
-                    "line": ref["line"],
-                    "kind": "reference",
-                    "context": context,
-                })
-                if len(results) >= limit:
-                    break
-            return results
-        except Exception:
-            return _index_based_usages(project_root, name, index, path_scope, kind_filter, limit, include_tests)
 
     def get_definition_source(self, project_root, name, index, file_hint=None):
         return _index_based_definition(project_root, name, index, file_hint)
@@ -351,63 +454,6 @@ def _clean_jsdoc(comment: str | None) -> str | None:
             lines.append(line)
         text = " ".join(lines).strip()
     return text if text else None
-
-
-def _find_name_column(source: str, line: int, name: str) -> int:
-    lines = source.splitlines()
-    if 0 < line <= len(lines):
-        idx = lines[line - 1].find(name)
-        if idx >= 0:
-            return idx
-    return 0
-
-
-def _is_test_file(path: str) -> bool:
-    parts = path.split("/")
-    filename = parts[-1]
-    return (
-        filename.endswith(".test.ts")
-        or filename.endswith(".test.tsx")
-        or filename.endswith(".spec.ts")
-        or filename.endswith(".spec.tsx")
-        or any(p in ("tests", "test", "__tests__") for p in parts[:-1])
-    )
-
-
-def _get_context_line(file_path: pathlib.Path, line: int) -> str:
-    try:
-        source = file_path.read_text(encoding="utf-8", errors="replace")
-        lines = source.splitlines()
-        if 0 < line <= len(lines):
-            return lines[line - 1].strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _index_based_usages(project_root, name, index, path_scope=None, kind_filter=None, limit=50, include_tests=True):
-    root = pathlib.Path(project_root)
-    candidates = index.search_symbols(name)
-    results = []
-    for candidate in candidates:
-        rel = candidate["file"]
-        if path_scope and not rel.startswith(path_scope):
-            continue
-        if not include_tests and _is_test_file(rel):
-            continue
-        usage_kind = "definition"
-        if kind_filter and usage_kind != kind_filter:
-            continue
-        context = _get_context_line(root / rel, candidate["line"])
-        results.append({
-            "file": rel,
-            "line": candidate["line"],
-            "kind": usage_kind,
-            "context": context,
-        })
-        if len(results) >= limit:
-            break
-    return results
 
 
 def _index_based_definition(project_root, name, index, file_hint=None):

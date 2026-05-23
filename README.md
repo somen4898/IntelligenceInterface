@@ -1,8 +1,8 @@
 # ii-structure
 
-**Structural code navigation for LLM agents. Supports Python, Go, and TypeScript. 14.6x fewer tokens than grep + read on real projects.**
+**Graph-backed structural code navigation, editing, and analysis for LLM agents. Supports Python, Go, and TypeScript.**
 
-LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 9 commands (7 read, 2 write) work identically across Python, Go, and TypeScript.
+LLM coding agents burn thousands of tokens reading whole files and wading through noisy grep results to answer simple structural questions. ii-structure replaces "read text and filter mentally" with "ask a structural question, get a structural answer." All 12 commands (7 read, 2 write, 3 analysis) work identically across Python, Go, and TypeScript.
 
 ```
 pip install ii-structure
@@ -35,72 +35,37 @@ result:
 → 52 tokens consumed (10.9x reduction)
 ```
 
-## Token Savings — Measured, Not Claimed
-
-All numbers measured with `tiktoken`, comparing native tools (grep, cat/read) against ii-structure on identical queries.
-
-### Real-World Project (production codebase)
-
-| Task | Native Tokens | ii-structure Tokens | Reduction |
-|------|:---:|:---:|:---:|
-| File structure overview | 1,571 | 237 | **6.6x** |
-| Find all usages of a symbol | 13,361 | 105 | **127.2x** |
-| Production usages (no tests) | 13,109 | 105 | **124.8x** |
-| Read single function | 1,571 | 1,823 | 0.9x |
-| Search for 'config' | 16,918 | 126 | **134.3x** |
-| **Total** | **33,421** | **2,291** | **14.6x** |
-
-### Self-Referential (ii-structure's own codebase)
-
-| Task | Native Tokens | ii-structure Tokens | Reduction |
-|------|:---:|:---:|:---:|
-| Find a class definition | 566 | 52 | **10.9x** |
-| Understand a module's structure | 1,744 | 645 | **2.7x** |
-| Find all callers of a function | 328 | 571 | 0.6x* |
-| Read one method's implementation | 1,272 | 159 | **8.0x** |
-| **Total** | **3,910** | **1,427** | **2.7x** |
-
-The pattern: savings scale with project size. On a small codebase (1.3k lines), grep is tolerable — 2.7x savings. On a real project, grep returns thousands of noisy matches and files are longer — 14.6x savings. Larger projects = bigger wins.
-
-*\*`usages` on the small codebase returns more than grep because it includes test files with classification. Use `--no-tests` to save 33% when exploring.*
-
 ## How It Works
 
-ii-structure uses language-specific parsers to extract structural information:
+ii-structure builds a **SQLite graph store** with nodes (symbols) and edges (calls, imports, test coverage). Language-specific parsers extract structure and relationships:
 
 - **Python:** `ast` module (stdlib) + [Jedi](https://github.com/davidhalter/jedi) for type-resolved references
 - **Go:** [tree-sitter](https://tree-sitter.github.io/) + optional [gopls](https://pkg.go.dev/golang.org/x/tools/gopls) for type-resolved references
 - **TypeScript/TSX:** [tree-sitter](https://tree-sitter.github.io/) + optional [typescript-language-server](https://github.com/typescript-language-server/typescript-language-server) for type-resolved references
 
-It maintains a lightweight JSON index that auto-updates when files change.
-
 ```
-Agent runs command → Index loads (or builds on first run) → Query executes → Compact YAML returned
+Agent runs command → Index loads (or builds on first run) → Graph queried → Compact YAML returned
 ```
 
 - **No server.** No daemon. No MCP. Each invocation is a fresh stateless process.
 - **No config.** Auto-detects project root via `pyproject.toml` / `setup.py` / `go.mod` / `tsconfig.json` / `package.json` / `.git`.
 - **Fast.** Structural commands complete in <300ms. Type-resolved `usages` in <1s.
 - **Graceful degradation.** Language servers are optional — without them, `usages` falls back to index-based name matching.
+- **Graph persistence.** SQLite stores pre-computed edges (call graph, import graph, test coverage) so analysis queries are instant lookups, not re-computation.
 
 ## Commands
 
-### Structural (ast-only, fast)
+### Read (structural, fast)
 
 | Command | What it does | Example |
 |---------|-------------|---------|
 | `files` | List indexed files, or project map with `--summary` | `ii-structure files --summary --path src/` |
 | `outline` | File skeleton — classes, functions, signatures. No bodies. | `ii-structure outline src/app.py --depth full` |
 | `locate` | Find where a symbol is defined | `ii-structure locate User/save` |
+| `body` | Full source of one symbol + content hash | `ii-structure body Index/build` |
+| `usages` | Find all references, resolved by type | `ii-structure usages User/save --no-tests` |
 | `imports` | Forward + reverse dependency graph | `ii-structure imports src/api.py --depth 2` |
 | `search` | Ranked search over symbol names and docstrings | `ii-structure search authenticate` |
-
-### Type-Aware (Jedi/gopls/tsserver-powered)
-
-| Command | What it does | Example |
-|---------|-------------|---------|
-| `usages` | Find all references, resolved by type | `ii-structure usages User/save --no-tests` |
-| `body` | Full source of one symbol + content hash | `ii-structure body Index/build` |
 
 ### Write (symbol-level code modification)
 
@@ -110,9 +75,9 @@ Agent runs command → Index loads (or builds on first run) → Query executes �
 | `insert-symbol` | Insert new code before/after a symbol via stdin | `echo 'def validate(self): pass' \| ii-structure insert-symbol --after User/save` |
 
 Both write commands:
-- **Auto-indent** — new code is re-indented to match the target symbol's level, including deeply nested classes
+- **Auto-indent** — new code is re-indented to match the target symbol's level
 - **`--expect-hash`** — pass the `content_hash` from `body` to reject the write if the file changed since the last read (optimistic concurrency)
-- **Index auto-refresh** — the structural index is updated after every write, no rebuild needed
+- **Index auto-refresh** — the structural index and graph edges are updated after every write
 
 **Safe write workflow:**
 ```bash
@@ -125,6 +90,14 @@ echo 'def save(self):
     self.db.update(self.to_dict())
     return True' | ii-structure replace-body User/save --expect-hash sha256:a1b2c3d4...
 ```
+
+### Analysis (graph-powered)
+
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `blast-radius` | What breaks if I change X? Affected symbols, files, and tests. | `ii-structure blast-radius User/save --depth 3` |
+| `dead-code` | Find symbols with no callers (potentially dead code) | `ii-structure dead-code --file src/utils.py` |
+| `test-coverage` | Which tests exercise a symbol (direct + transitive)? | `ii-structure test-coverage User/save` |
 
 ### Meta
 
@@ -142,8 +115,9 @@ echo 'def save(self):
 4. Read       →  ii-structure body <name>             (just the symbol, not the whole file)
 5. Trace      →  ii-structure usages <name>           (all callers, type-resolved)
 6. Deps       →  ii-structure imports <file>          (what depends on this?)
-7. Replace    →  ii-structure replace-body <name>     (rewrite a symbol via stdin)
-8. Insert     →  ii-structure insert-symbol --after <name>  (add code next to a symbol)
+7. Analyze    →  ii-structure blast-radius <name>     (impact before refactoring)
+8. Replace    →  ii-structure replace-body <name>     (rewrite a symbol via stdin)
+9. Insert     →  ii-structure insert-symbol --after <name>  (add code next to a symbol)
 ```
 
 The `help` command returns this workflow and per-command guidance as structured YAML — the agent reads it on first contact.
@@ -154,42 +128,21 @@ The `help` command returns this workflow and per-command guidance as structured 
 
 Python's `ast` module gives identical structural extraction with zero native dependencies. For Go and TypeScript, tree-sitter provides fast, accurate parsing across languages. Type-resolved reference finding uses language-specific tooling: Jedi for Python, gopls for Go, typescript-language-server for TypeScript. Language servers are optional — structural commands always work, `usages` gracefully degrades to index-based name matching when servers aren't installed.
 
+**Why graph persistence (SQLite over JSON)?**
+
+The original JSON index stored flat symbol lists. Analysis queries like "what breaks if I change X?" required re-walking the entire index on every invocation. SQLite stores pre-computed edges (calls, imports, test coverage) so blast-radius, dead-code, and test-coverage are instant graph lookups. Edge extraction happens at index time — the cost is paid once, not per query. SQLite also handles concurrent access safely and scales to large codebases without loading the entire index into memory.
+
 **Why include test files by default in `usages`?**
 
 Every major tool (Sourcegraph, VS Code, Serena) includes tests by default. Excluding them during refactors causes agents to miss call sites and ship broken code. The `--no-tests` flag is opt-in for exploration.
 
 **Why symbol-level writes instead of line-based edits?**
 
-Every major AI coding tool (Claude Code, Aider, Cursor, Codex CLI) converged on content-addressed editing (search/replace or full rewrite) over line-number-based editing. Academic benchmarks (Diff-XYZ 2025, "To Diff or Not to Diff" 2025) confirm that LLMs reliably produce wrong line numbers — search/replace hits 94% accuracy while line-number formats hit 14-38%. `replace-body` is a full rewrite scoped to a single symbol, which is the sweet spot: the scope is small enough (5-50 lines) that full replacement is cheap, and the agent doesn't need to compute line numbers or exact `old_str` matches.
+Every major AI coding tool (Claude Code, Aider, Cursor, Codex CLI) converged on content-addressed editing (search/replace or full rewrite) over line-number-based editing. Academic benchmarks confirm that LLMs reliably produce wrong line numbers — search/replace hits 94% accuracy while line-number formats hit 14-38%. `replace-body` is a full rewrite scoped to a single symbol, which is the sweet spot: the scope is small enough (5-50 lines) that full replacement is cheap, and the agent doesn't need to compute line numbers or exact `old_str` matches.
 
 **Why YAML output?**
 
 YAML is the most token-efficient structured format for LLMs — fewer quotes and braces than JSON. Every command returns the same envelope (`ok`, `command`, `result` or `error`) so the agent can parse responses uniformly.
-
-## Benchmarks
-
-Benchmarks ship with the tool and run as a CLI command:
-
-```
-$ ii-structure benchmark run
-
-ID                   Arch               Bytes  Cmds     Time  Pass
------------------------------------------------------------------
-find-known-1         find-known           165     1    0.20s     ✓
-find-known-2         find-known           223     1    0.15s     ✓
-find-known-3         find-known           380     1    0.15s     ✓
-find-unknown-1       find-unknown        2111     1    0.15s     ✓
-find-unknown-2       find-unknown         410     1    0.15s     ✓
-modify-1             modify              1994     1    0.39s     ✓
-modify-2             modify               571     1    0.20s     ✓
-understand-1         understand          2228     1    0.15s     ✓
-understand-2         understand           575     1    0.15s     ✓
-understand-3         understand           754     1    0.16s     ✓
------------------------------------------------------------------
-Total: 10 queries, 10/10 correct, 9411 bytes
-```
-
-10 queries across 4 archetypes (find-known, find-unknown, understand, modify). Regression detection via `ii-structure benchmark compare`.
 
 ## Installation
 
@@ -231,7 +184,7 @@ cd IntelligenceInterface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pytest tests/       # 241 tests
+pytest tests/       # 299 tests
 ```
 
 ## Project Structure
@@ -241,6 +194,7 @@ src/ii_structure/
 ├── cli.py              # Click entry point
 ├── parser.py           # Python ast-based symbol/import extraction
 ├── index.py            # Structural index with staleness detection
+├── graph.py            # SQLite graph store (nodes, edges, analysis queries)
 ├── resolver.py         # Jedi-powered type resolution (Python)
 ├── lsp_client.py       # Generic LSP client for Go/TS language servers
 ├── output.py           # YAML envelope formatting
@@ -262,6 +216,9 @@ src/ii_structure/
     ├── search.py       # Ranked symbol search
     ├── replace_body.py # Replace symbol source
     ├── insert_symbol.py# Insert code by position
+    ├── blast_radius.py # Impact analysis
+    ├── dead_code.py    # Unused code detection
+    ├── test_coverage.py# Structural test coverage
     └── help.py         # Agent documentation
 ```
 

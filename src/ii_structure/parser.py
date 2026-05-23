@@ -1,6 +1,8 @@
 import ast
 from dataclasses import dataclass, field
 
+_MAX_AST_DEPTH = 180
+
 
 @dataclass
 class SymbolInfo:
@@ -24,9 +26,19 @@ class ImportInfo:
 
 
 @dataclass
+class EdgeInfo:
+    kind: str       # CALLS, IMPORTS, TESTED_BY
+    source: str     # qualified name of caller
+    target: str     # qualified name or bare name of callee
+    file_path: str
+    line: int = 0
+
+
+@dataclass
 class ParseResult:
     symbols: list[SymbolInfo]
     imports: list[ImportInfo]
+    edges: list[EdgeInfo]
     error: str | None
 
 
@@ -34,28 +46,33 @@ def parse_file(file_path: str, source: str) -> ParseResult:
     try:
         tree = ast.parse(source, filename=file_path)
     except SyntaxError as e:
-        return ParseResult(symbols=[], imports=[], error=str(e))
+        return ParseResult(symbols=[], imports=[], edges=[], error=str(e))
 
     symbols: list[SymbolInfo] = []
     imports: list[ImportInfo] = []
+    edges: list[EdgeInfo] = []
 
     _extract_symbols(tree, symbols, parent_path=None)
     _extract_imports(tree, imports)
+    _extract_edges(tree, file_path, edges, symbols)
 
-    return ParseResult(symbols=symbols, imports=imports, error=None)
+    return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
 
 def _extract_symbols(
     node: ast.AST,
     symbols: list[SymbolInfo],
     parent_path: str | None,
+    _depth: int = 0,
 ) -> None:
+    if _depth > _MAX_AST_DEPTH:
+        return
     for child in ast.iter_child_nodes(node):
         if isinstance(child, ast.ClassDef):
             info = _make_class_info(child, parent_path)
             symbols.append(info)
             child_path = f"{parent_path}/{child.name}" if parent_path else child.name
-            _extract_symbols(child, symbols, parent_path=child_path)
+            _extract_symbols(child, symbols, parent_path=child_path, _depth=_depth + 1)
 
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             info = _make_function_info(child, parent_path)
@@ -240,3 +257,81 @@ def _extract_imports(tree: ast.Module, imports: list[ImportInfo]) -> None:
                 line=node.lineno,
                 is_relative=(node.level or 0) > 0,
             ))
+
+
+def _is_test_file_path(file_path: str) -> bool:
+    name = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+    return name.startswith("test_") or name.endswith("_test.py")
+
+
+def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo], symbols: list[SymbolInfo] | None = None) -> None:
+    is_test = _is_test_file_path(file_path)
+
+    # Build same-file resolution lookup from already-extracted symbols
+    defined_names: dict[str, str] = {}
+    if symbols:
+        for sym in symbols:
+            if sym.kind in ("function", "method", "class"):
+                if sym.parent:
+                    qn = f"{file_path}::{sym.parent}.{sym.name}"
+                else:
+                    qn = f"{file_path}::{sym.name}"
+                defined_names[sym.name] = qn
+
+    # IMPORTS edges
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                edges.append(EdgeInfo(
+                    kind="IMPORTS", source=file_path,
+                    target=alias.name, file_path=file_path, line=node.lineno,
+                ))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                edges.append(EdgeInfo(
+                    kind="IMPORTS", source=file_path,
+                    target=node.module, file_path=file_path, line=node.lineno,
+                ))
+
+    # Walk all functions/methods for CALLS/TESTED_BY edges
+    _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None, defined_names=defined_names)
+
+
+def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None, _depth=0):
+    if _depth > _MAX_AST_DEPTH:
+        return
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.ClassDef):
+            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names, _depth=_depth + 1)
+        elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Build source qualified name
+            if parent_class:
+                source_qn = f"{file_path}::{parent_class}.{child.name}"
+            else:
+                source_qn = f"{file_path}::{child.name}"
+
+            is_test_func = child.name.startswith("test_")
+            edge_kind = "TESTED_BY" if (is_test_file and is_test_func) else "CALLS"
+
+            # Walk the function body for Call nodes
+            for inner_node in ast.walk(child):
+                if isinstance(inner_node, ast.Call):
+                    call_name = _get_call_name(inner_node)
+                    if call_name:
+                        # Resolve to qualified name if defined in same file
+                        target = defined_names.get(call_name, call_name) if defined_names else call_name
+                        edges.append(EdgeInfo(
+                            kind=edge_kind,
+                            source=source_qn,
+                            target=target,
+                            file_path=file_path,
+                            line=inner_node.lineno,
+                        ))
+
+
+def _get_call_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
