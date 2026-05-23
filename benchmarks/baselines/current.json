@@ -3,9 +3,9 @@
     "id": "find-known-1",
     "archetype": "find-known",
     "description": "Find the Index class definition",
-    "output_bytes": 165,
+    "output_bytes": 369,
     "commands": 1,
-    "wall_clock_s": 0.147,
+    "wall_clock_s": 0.279,
     "correct": true
   },
   {
@@ -14,7 +14,7 @@
     "description": "Find the parse_file function",
     "output_bytes": 223,
     "commands": 1,
-    "wall_clock_s": 0.082,
+    "wall_clock_s": 0.261,
     "correct": true
   },
   {
@@ -23,16 +23,16 @@
     "description": "Find the save method inside the class it belongs to",
     "output_bytes": 380,
     "commands": 1,
-    "wall_clock_s": 0.08,
+    "wall_clock_s": 0.259,
     "correct": true
   },
   {
     "id": "find-unknown-1",
     "archetype": "find-unknown",
     "description": "Find something related to YAML output formatting",
-    "output_bytes": 2537,
+    "output_bytes": 3159,
     "commands": 1,
-    "wall_clock_s": 0.084,
+    "wall_clock_s": 0.262,
     "correct": true
   },
   {
@@ -41,43 +41,43 @@
     "description": "Find everything related to gitignore handling",
     "output_bytes": 410,
     "commands": 1,
-    "wall_clock_s": 0.08,
+    "wall_clock_s": 0.259,
     "correct": true
   },
   {
     "id": "modify-1",
     "archetype": "modify",
     "description": "Find all usages of format_success to understand impact of changing its signature",
-    "output_bytes": 1994,
+    "output_bytes": 1950,
     "commands": 1,
-    "wall_clock_s": 0.272,
+    "wall_clock_s": 0.26,
     "correct": true
   },
   {
     "id": "modify-2",
     "archetype": "modify",
     "description": "Get the full implementation of the Index.build method",
-    "output_bytes": 583,
+    "output_bytes": 1875,
     "commands": 1,
-    "wall_clock_s": 0.131,
+    "wall_clock_s": 0.314,
     "correct": true
   },
   {
     "id": "understand-1",
     "archetype": "understand",
     "description": "What does the parser module contain?",
-    "output_bytes": 2228,
+    "output_bytes": 2951,
     "commands": 1,
-    "wall_clock_s": 0.083,
+    "wall_clock_s": 0.262,
     "correct": true
   },
   {
     "id": "understand-2",
     "archetype": "understand",
     "description": "What are all the files in the project?",
-    "output_bytes": 802,
+    "output_bytes": 1049,
     "commands": 1,
-    "wall_clock_s": 0.081,
+    "wall_clock_s": 0.255,
     "correct": true
   },
   {
@@ -86,7 +86,7 @@
     "description": "What does cli.py depend on?",
     "output_bytes": 754,
     "commands": 1,
-    "wall_clock_s": 0.088,
+    "wall_clock_s": 0.26,
     "correct": true
   }
 ]
