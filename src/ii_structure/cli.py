@@ -42,16 +42,33 @@ def _get_index(ctx) -> Index:
 @click.option("--glob", "glob_pattern", default=None, help="Filter by glob pattern")
 @click.option("--path", "path_prefix", default=None, help="Filter by path prefix")
 @click.option("--summary", is_flag=True, default=False, help="Include top-level symbol signatures per file")
+@click.option("--no-tests", is_flag=True, default=False, help="Exclude test files from results")
+@click.option("--no-private", is_flag=True, default=False, help="Exclude private symbols (starting with _)")
 @click.pass_context
-def files(ctx, glob_pattern, path_prefix, summary):
+def files(ctx, glob_pattern, path_prefix, summary, no_tests, no_private):
     """List all indexed source files."""
     try:
         idx = _get_index(ctx)
         from ii_structure.commands.files import execute
-        results = execute(idx, glob_pattern=glob_pattern, path_prefix=path_prefix, summary=summary)
+        results = execute(idx, glob_pattern=glob_pattern, path_prefix=path_prefix,
+                         summary=summary, no_tests=no_tests, no_private=no_private)
         click.echo(format_success("files", results))
     except Exception as e:
         click.echo(format_error("files", str(e)))
+        sys.exit(1)
+
+
+@cli.command()
+@click.pass_context
+def overview(ctx):
+    """Graph-powered project overview — structure, key files, entry points."""
+    try:
+        idx = _get_index(ctx)
+        from ii_structure.commands.overview import execute
+        result = execute(idx=idx, project_root=str(ctx.obj["root"]))
+        click.echo(format_success("overview", result))
+    except Exception as e:
+        click.echo(format_error("overview", str(e)))
         sys.exit(1)
 
 
@@ -403,6 +420,7 @@ You have `ii-structure` installed. It provides structural code navigation, symbo
 4. **NEVER use Read + Edit to rewrite a function.** Use `ii-structure body Name` (get hash) → `ii-structure replace-body Name --expect-hash <hash>`.
 5. **ALWAYS run `ii-structure files --summary`** on any new or unfamiliar project.
 6. **ALWAYS run `ii-structure blast-radius Name`** before refactoring to understand impact.
+7. **ALWAYS run `ii-structure overview`** as your FIRST command on any new project — cheaper than files --summary.
 
 ## Decision Tree — What Tool To Use
 
@@ -435,7 +453,8 @@ I need to...
 │   └── Non-symbol edit? → Edit tool
 │
 └── UNDERSTAND the project
-    ├── Project overview? → ii-structure files --summary
+    ├── Quick overview? → ii-structure overview
+    ├── Detailed file list? → ii-structure files --summary --no-tests --no-private
     ├── File structure? → ii-structure outline file.py --depth full
     └── Dependencies? → ii-structure imports file.py
 ```
