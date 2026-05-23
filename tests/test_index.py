@@ -1,7 +1,4 @@
-import json
-import pathlib
 import time
-import pytest
 from ii_structure.index import Index
 
 

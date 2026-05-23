@@ -4,9 +4,7 @@ Tests JSON-RPC encoding/decoding and message framing without requiring
 an actual language server.
 """
 import json
-import subprocess
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 from ii_structure.lsp_client import LspClient
 
 

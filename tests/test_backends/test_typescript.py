@@ -1,6 +1,4 @@
-import pytest
 from ii_structure.backends.typescript import TypeScriptBackend
-from ii_structure.parser import ParseResult
 
 backend = TypeScriptBackend()
 
