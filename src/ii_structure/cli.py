@@ -397,9 +397,9 @@ You have `ii-structure` installed. It provides structural code navigation, symbo
 
 ## HARD RULES — Violations Waste Tokens
 
-1. **NEVER read a source file to find a function.** Use `ii-structure body Symbol/name`.
-2. **NEVER grep for a symbol definition.** Use `ii-structure locate Name` or `ii-structure search query`.
-3. **NEVER read a whole file to understand its structure.** Use `ii-structure outline file.py --depth full`.
+1. **NEVER read a source file to find a function.** Use `ii-structure body Symbol/name`. Reading a 500-line file to find a 10-line function wastes 490 lines of tokens.
+2. **NEVER grep for a symbol definition.** Use `ii-structure locate Name` or `ii-structure search query`. Grep returns noise — ii-structure returns only definitions.
+3. **NEVER read a whole file to understand its structure.** Use `ii-structure outline file.py --depth full`. Returns the skeleton in ~100 tokens instead of ~2000.
 4. **NEVER use Read + Edit to rewrite a function.** Use `ii-structure body Name` (get hash) → `ii-structure replace-body Name --expect-hash <hash>`.
 5. **ALWAYS run `ii-structure files --summary`** on any new or unfamiliar project.
 6. **ALWAYS run `ii-structure blast-radius Name`** before refactoring to understand impact.
@@ -454,6 +454,7 @@ I need to...
 - `--no-tests` on `usages` — exclude test files when exploring
 - `--depth full` on `outline` — include methods inside classes
 - `--kind` on `locate`/`outline` — filter by type
+- `--match substring` on `locate` — partial name matching
 - `--file` on any command — disambiguate when symbols share names
 
 ## Workflow
