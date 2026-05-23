@@ -1,6 +1,4 @@
-import pytest
 from ii_structure.backends.golang import GoBackend
-from ii_structure.parser import ParseResult
 
 backend = GoBackend()
 

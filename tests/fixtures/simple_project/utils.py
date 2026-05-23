@@ -1,6 +1,5 @@
 """Utility functions."""
 
-import os
 import json
 from typing import Any
 

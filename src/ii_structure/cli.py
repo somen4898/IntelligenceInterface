@@ -517,11 +517,8 @@ def init(ctx):
 
     # Python
     has_py = any(root.rglob("*.py"))
-    has_jedi = True
-    try:
-        import jedi
-    except ImportError:
-        has_jedi = False
+    import importlib.util
+    has_jedi = importlib.util.find_spec("jedi") is not None
     if has_py:
         if has_jedi:
             click.echo("  Python (.py):     \u2713 full support (Jedi installed)")
