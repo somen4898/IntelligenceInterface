@@ -1,6 +1,8 @@
 import ast
 from dataclasses import dataclass, field
 
+_MAX_AST_DEPTH = 180
+
 
 @dataclass
 class SymbolInfo:
@@ -61,13 +63,16 @@ def _extract_symbols(
     node: ast.AST,
     symbols: list[SymbolInfo],
     parent_path: str | None,
+    _depth: int = 0,
 ) -> None:
+    if _depth > _MAX_AST_DEPTH:
+        return
     for child in ast.iter_child_nodes(node):
         if isinstance(child, ast.ClassDef):
             info = _make_class_info(child, parent_path)
             symbols.append(info)
             child_path = f"{parent_path}/{child.name}" if parent_path else child.name
-            _extract_symbols(child, symbols, parent_path=child_path)
+            _extract_symbols(child, symbols, parent_path=child_path, _depth=_depth + 1)
 
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             info = _make_function_info(child, parent_path)
@@ -292,10 +297,12 @@ def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo], symb
     _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None, defined_names=defined_names)
 
 
-def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None):
+def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None, _depth=0):
+    if _depth > _MAX_AST_DEPTH:
+        return
     for child in ast.iter_child_nodes(node):
         if isinstance(child, ast.ClassDef):
-            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names)
+            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names, _depth=_depth + 1)
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Build source qualified name
             if parent_class:

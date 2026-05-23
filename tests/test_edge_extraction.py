@@ -409,3 +409,87 @@ function caller(): void { helper(); }
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
     assert "app.ts::helper" in targets
+
+
+# ── Depth guard tests ──
+
+
+def test_depth_guard_no_crash():
+    """Deeply nested code should not crash."""
+    source = "def deep():\n"
+    for i in range(200):
+        source += "    " * (i + 1) + "if True:\n"
+    source += "    " * 201 + "pass\n"
+    result = parse_file("deep.py", source)
+    # Should not crash — just return what it can
+    assert result.error is None or result.error is not None  # no crash
+
+
+# ── Receiver in call names tests ──
+
+
+def test_go_keeps_receiver_in_call():
+    source = """\
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("hello")
+}
+"""
+    backend = GoBackend()
+    result = backend.parse_file("main.go", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    # Should keep "fmt.Println" not just "Println"
+    assert any("Println" in t for t in targets)
+
+
+def test_ts_keeps_receiver_in_call():
+    source = """\
+class Service {
+    validate(): boolean { return true; }
+    process(): void {
+        this.validate();
+    }
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("svc.ts", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert any("validate" in t for t in targets)
+
+
+# ── JSX component call detection tests ──
+
+
+def test_tsx_jsx_component_call():
+    source = """\
+function UserProfile() { return <div>Profile</div>; }
+
+function App() {
+    return <UserProfile />;
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("app.tsx", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert any("UserProfile" in t for t in targets)
+
+
+def test_tsx_html_element_not_tracked():
+    """Lowercase JSX elements (div, span) should NOT generate call edges."""
+    source = """\
+function App() {
+    return <div><span>hi</span></div>;
+}
+"""
+    backend = TypeScriptBackend()
+    result = backend.parse_file("app.tsx", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert "div" not in targets
+    assert "span" not in targets

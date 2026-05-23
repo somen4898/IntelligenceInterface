@@ -330,14 +330,16 @@ class TypeScriptBackend:
                         qn = f"{class_name}.{name}"
                     result.append((qn, child))
 
-    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None):
-        """Recursively walk a node's subtree for call/new expressions."""
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None, _depth: int = 0):
+        """Recursively walk a node's subtree for call/new/JSX expressions."""
+        if _depth > 180:
+            return
         for child in _get_children(node):
             kind = child.kind()
             if kind == "call_expression":
                 call_name = self._get_call_name(child, source)
                 if call_name:
-                    target = defined_names.get(call_name, call_name) if defined_names else call_name
+                    target = self._resolve_call_name(call_name, defined_names)
                     edges.append(EdgeInfo(
                         kind=edge_kind, source=enclosing_qn,
                         target=target, file_path=file_path,
@@ -346,13 +348,37 @@ class TypeScriptBackend:
             elif kind == "new_expression":
                 call_name = self._get_new_name(child, source)
                 if call_name:
-                    target = defined_names.get(call_name, call_name) if defined_names else call_name
+                    target = self._resolve_call_name(call_name, defined_names)
                     edges.append(EdgeInfo(
                         kind=edge_kind, source=enclosing_qn,
                         target=target, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
-            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names)
+            elif kind in ("jsx_self_closing_element", "jsx_opening_element"):
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    component_name = _get_text(name_node, source)
+                    # Only track PascalCase names (components, not HTML elements)
+                    if component_name and component_name[0].isupper():
+                        target = defined_names.get(component_name, component_name) if defined_names else component_name
+                        edges.append(EdgeInfo(
+                            kind=edge_kind, source=enclosing_qn,
+                            target=target, file_path=file_path,
+                            line=child.start_position().row + 1,
+                        ))
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names, _depth + 1)
+
+    def _resolve_call_name(self, call_name: str, defined_names: dict[str, str] | None) -> str:
+        """Resolve a call name to its qualified form using defined_names."""
+        if not defined_names:
+            return call_name
+        if call_name in defined_names:
+            return defined_names[call_name]
+        if "." in call_name:
+            method_part = call_name.rsplit(".", 1)[-1]
+            if method_part in defined_names:
+                return defined_names[method_part]
+        return call_name
 
     def _get_call_name(self, call_node, source: str) -> str | None:
         """Extract function/method name from a call_expression node."""
@@ -363,9 +389,8 @@ class TypeScriptBackend:
         if kind == "identifier":
             return _get_text(func_node, source)
         if kind == "member_expression":
-            prop = func_node.child_by_field_name("property")
-            if prop:
-                return _get_text(prop, source)
+            # Return full object.property (e.g. "this.validate", "router.get")
+            return _get_text(func_node, source)
         return None
 
     def _get_new_name(self, new_node, source: str) -> str | None:

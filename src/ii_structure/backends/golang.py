@@ -246,20 +246,29 @@ class GoBackend:
                             name = f"{recv_type}.{name}"
                     result.append((name, child))
 
-    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None):
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None, _depth: int = 0):
         """Recursively walk a node's subtree for call_expression nodes."""
+        if _depth > 180:
+            return
         for child in _get_children(node):
             if child.kind() == "call_expression":
                 call_name = self._get_call_name(child, source)
                 if call_name:
                     # Resolve to qualified name if defined in same file
-                    target = defined_names.get(call_name, call_name) if defined_names else call_name
+                    target = call_name
+                    if defined_names:
+                        if call_name in defined_names:
+                            target = defined_names[call_name]
+                        elif "." in call_name:
+                            method_part = call_name.rsplit(".", 1)[-1]
+                            if method_part in defined_names:
+                                target = defined_names[method_part]
                     edges.append(EdgeInfo(
                         kind=edge_kind, source=enclosing_qn,
                         target=target, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
-            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names)
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names, _depth + 1)
 
     def _get_call_name(self, call_node, source: str) -> str | None:
         """Extract the function/method name from a call_expression node."""
@@ -270,10 +279,8 @@ class GoBackend:
         if kind == "identifier":
             return _get_text(func_node, source)
         if kind == "selector_expression":
-            # obj.Method() — return the field (method) name
-            field_node = func_node.child_by_field_name("field")
-            if field_node:
-                return _get_text(field_node, source)
+            # obj.Method() — return full receiver.method (e.g. "http.Get", "s.Init")
+            return _get_text(func_node, source)
         return None
 
     def _attach_methods_to_types(self, symbols: list[SymbolInfo]):
