@@ -83,10 +83,10 @@ commands:
     usage: "ii-structure files [--glob PATTERN] [--path PREFIX] [--summary]"
     tips: |
       --summary: returns files + top-level symbol signatures. This is the project map.
-        Use this first on any unfamiliar project. One command, full orientation.
+      --no-tests: skip test files when orienting to a new project.
+      --no-private: skip symbols starting with _ for a cleaner overview.
       --glob: shell patterns like '*model*', 'test_*.py'
       --path: prefix filter like 'src/api/'
-      Combine: 'files --summary --path src/' maps only source files, skipping tests.
     example:
       input: "ii-structure files --summary --path src/"
       output: |
@@ -101,6 +101,52 @@ commands:
             symbols:
               - "def create_user(request: Request) -> User"
               - "def get_user(user_id: int) -> User"
+
+  overview:
+    description: "Graph-powered project overview — structure, key files, entry points."
+    when_to_use: |
+      YOUR VERY FIRST COMMAND on any new project. Returns a compact overview
+      with directory structure, the most important files (ranked by how many
+      other files depend on them), entry points, and test statistics.
+      Much cheaper than 'files --summary' for orientation.
+    when_not_to_use: |
+      When you already know the project structure. Use 'files --summary' for
+      a detailed file listing, or 'outline' for a specific file.
+    cost: fast
+    usage: "ii-structure overview"
+    tips: |
+      Returns ~500-1000 bytes regardless of project size.
+      Key files are ranked by incoming edge count — the most depended-on files first.
+      Use this before 'files --summary' to know which areas to explore.
+    example:
+      input: "ii-structure overview"
+      output: |
+        ok: true
+        command: overview
+        result:
+          total_files: 45
+          total_symbols: 312
+          total_edges: 890
+          languages: [python, typescript]
+          structure:
+            - directory: src/models/
+              files: 5
+              classes: 8
+              functions: 3
+            - directory: src/api/
+              files: 4
+              classes: 2
+              functions: 15
+          key_files:
+            - file: src/models/user.py
+              importance: 42
+              classes: [User, UserProfile]
+              functions: [create_user]
+          entry_points:
+            - file: src/main.py
+              symbol: main
+          test_files: 18
+          source_files: 27
 
   outline:
     description: "File skeleton: classes, functions, signatures, docstrings. No function bodies."

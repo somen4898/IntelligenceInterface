@@ -1,4 +1,3 @@
-import pytest
 from ii_structure.parser import parse_file
 
 

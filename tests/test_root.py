@@ -1,4 +1,3 @@
-import pathlib
 import pytest
 from ii_structure.root import find_project_root
 

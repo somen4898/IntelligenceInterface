@@ -1,8 +1,6 @@
-import json
 import sys
 import yaml
 import subprocess
-import pathlib
 import pytest
 
 

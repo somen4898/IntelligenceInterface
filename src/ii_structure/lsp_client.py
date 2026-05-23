@@ -11,7 +11,6 @@ import json
 import shutil
 import subprocess
 import threading
-from pathlib import Path
 
 
 class LspClient:
@@ -161,7 +160,6 @@ class LspClient:
 
     def _receive(self, expected_id: int, timeout: float = 30.0):
         """Read responses until we get the one matching expected_id."""
-        import select
         import time
 
         deadline = time.monotonic() + timeout

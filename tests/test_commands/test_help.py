@@ -6,12 +6,12 @@ def test_help_full_menu():
     assert "overview" in result
     assert "workflow" in result
     assert "commands" in result
-    assert len(result["commands"]) == 12
+    assert len(result["commands"]) == 13
 
 
 def test_help_has_all_commands():
     result = execute()
-    expected = {"files", "outline", "locate", "usages", "body", "imports", "search", "replace-body", "insert-symbol", "blast-radius", "dead-code", "test-coverage"}
+    expected = {"files", "outline", "locate", "usages", "body", "imports", "search", "replace-body", "insert-symbol", "blast-radius", "dead-code", "test-coverage", "overview"}
     assert set(result["commands"].keys()) == expected
 
 

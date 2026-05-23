@@ -1,4 +1,3 @@
-import pytest
 from ii_structure.index import Index
 from ii_structure.commands.body import execute
 
