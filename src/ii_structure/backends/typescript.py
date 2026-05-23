@@ -255,6 +255,16 @@ class TypeScriptBackend:
             name = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
             is_test_file = name.startswith("test_") or "/__tests__/" in file_path
 
+        # Build same-file resolution lookup from already-extracted symbols
+        defined_names: dict[str, str] = {}
+        for sym in symbols:
+            if sym.kind in ("function", "method", "class", "interface"):
+                if sym.parent:
+                    qn = f"{file_path}::{sym.parent}.{sym.name}"
+                else:
+                    qn = f"{file_path}::{sym.name}"
+                defined_names[sym.name] = qn
+
         # IMPORTS edges from already-extracted imports
         for imp in imports:
             edges.append(EdgeInfo(
@@ -275,7 +285,7 @@ class TypeScriptBackend:
             body = node.child_by_field_name("body")
             if not body:
                 continue
-            self._walk_calls(body, source, file_path, qn, edges, edge_kind)
+            self._walk_calls(body, source, file_path, qn, edges, edge_kind, defined_names)
 
         return edges
 
@@ -320,27 +330,29 @@ class TypeScriptBackend:
                         qn = f"{class_name}.{name}"
                     result.append((qn, child))
 
-    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS"):
+    def _walk_calls(self, node, source: str, file_path: str, enclosing_qn: str, edges: list[EdgeInfo], edge_kind: str = "CALLS", defined_names: dict[str, str] | None = None):
         """Recursively walk a node's subtree for call/new expressions."""
         for child in _get_children(node):
             kind = child.kind()
             if kind == "call_expression":
                 call_name = self._get_call_name(child, source)
                 if call_name:
+                    target = defined_names.get(call_name, call_name) if defined_names else call_name
                     edges.append(EdgeInfo(
                         kind=edge_kind, source=enclosing_qn,
-                        target=call_name, file_path=file_path,
+                        target=target, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
             elif kind == "new_expression":
                 call_name = self._get_new_name(child, source)
                 if call_name:
+                    target = defined_names.get(call_name, call_name) if defined_names else call_name
                     edges.append(EdgeInfo(
                         kind=edge_kind, source=enclosing_qn,
-                        target=call_name, file_path=file_path,
+                        target=target, file_path=file_path,
                         line=child.start_position().row + 1,
                     ))
-            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind)
+            self._walk_calls(child, source, file_path, enclosing_qn, edges, edge_kind, defined_names)
 
     def _get_call_name(self, call_node, source: str) -> str | None:
         """Extract function/method name from a call_expression node."""

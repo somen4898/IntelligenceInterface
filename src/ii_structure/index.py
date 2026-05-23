@@ -214,7 +214,7 @@ class Index:
             rel = str(source_file.relative_to(root))
             content = source_file.read_text(encoding="utf-8", errors="replace")
             backend = get_backend(str(source_file))
-            result = backend.parse_file(str(source_file), content)
+            result = backend.parse_file(rel, content)
             fhash = _content_hash(content)
 
             # Store nodes + edges
@@ -301,7 +301,7 @@ class Index:
 
             # Re-parse
             backend = get_backend(str(source_file))
-            result = backend.parse_file(str(source_file), content)
+            result = backend.parse_file(rel, content)
             self.graph.store_file_nodes_edges(rel, result.symbols, result.edges, actual_hash)
 
             imports_json = json.dumps([asdict(i) for i in result.imports])

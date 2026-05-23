@@ -52,7 +52,7 @@ def parse_file(file_path: str, source: str) -> ParseResult:
 
     _extract_symbols(tree, symbols, parent_path=None)
     _extract_imports(tree, imports)
-    _extract_edges(tree, file_path, edges)
+    _extract_edges(tree, file_path, edges, symbols)
 
     return ParseResult(symbols=symbols, imports=imports, edges=edges, error=None)
 
@@ -259,8 +259,19 @@ def _is_test_file_path(file_path: str) -> bool:
     return name.startswith("test_") or name.endswith("_test.py")
 
 
-def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo]) -> None:
+def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo], symbols: list[SymbolInfo] | None = None) -> None:
     is_test = _is_test_file_path(file_path)
+
+    # Build same-file resolution lookup from already-extracted symbols
+    defined_names: dict[str, str] = {}
+    if symbols:
+        for sym in symbols:
+            if sym.kind in ("function", "method", "class"):
+                if sym.parent:
+                    qn = f"{file_path}::{sym.parent}.{sym.name}"
+                else:
+                    qn = f"{file_path}::{sym.name}"
+                defined_names[sym.name] = qn
 
     # IMPORTS edges
     for node in ast.iter_child_nodes(tree):
@@ -278,13 +289,13 @@ def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo]) -> N
                 ))
 
     # Walk all functions/methods for CALLS/TESTED_BY edges
-    _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None)
+    _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None, defined_names=defined_names)
 
 
-def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None):
+def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None):
     for child in ast.iter_child_nodes(node):
         if isinstance(child, ast.ClassDef):
-            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name)
+            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names)
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Build source qualified name
             if parent_class:
@@ -300,10 +311,12 @@ def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=
                 if isinstance(inner_node, ast.Call):
                     call_name = _get_call_name(inner_node)
                     if call_name:
+                        # Resolve to qualified name if defined in same file
+                        target = defined_names.get(call_name, call_name) if defined_names else call_name
                         edges.append(EdgeInfo(
                             kind=edge_kind,
                             source=source_qn,
-                            target=call_name,
+                            target=target,
                             file_path=file_path,
                             line=inner_node.lineno,
                         ))

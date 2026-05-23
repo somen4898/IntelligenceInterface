@@ -15,7 +15,7 @@ def test_extracts_function_call():
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     assert len(call_edges) >= 1
     targets = {e.target for e in call_edges}
-    assert "helper" in targets
+    assert "app.py::helper" in targets
 
 
 def test_extracts_method_call():
@@ -29,7 +29,7 @@ def test_extracts_method_call():
     result = parse_file("models.py", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "save" in targets
+    assert "models.py::User.save" in targets
 
 
 def test_extracts_imported_call():
@@ -153,7 +153,7 @@ func helper() int {
     result = backend.parse_file("main.go", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "helper" in targets
+    assert "main.go::helper" in targets
 
 
 def test_go_extracts_method_call():
@@ -172,7 +172,7 @@ func (s *Server) Init() {}
     result = backend.parse_file("server.go", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "Init" in targets
+    assert "server.go::Server.Init" in targets
 
 
 def test_go_extracts_import_edges():
@@ -208,7 +208,7 @@ function helper(): number {
     result = backend.parse_file("app.ts", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "helper" in targets
+    assert "app.ts::helper" in targets
 
 
 def test_ts_extracts_new_expression():
@@ -223,7 +223,7 @@ function createUser(): User {
     result = backend.parse_file("app.ts", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "User" in targets
+    assert "app.ts::User" in targets
 
 
 def test_ts_extracts_method_call():
@@ -241,7 +241,7 @@ class Service {
     result = backend.parse_file("service.ts", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "validate" in targets
+    assert "service.ts::Service.validate" in targets
 
 
 def test_ts_extracts_import_edges():
