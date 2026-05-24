@@ -314,9 +314,12 @@ class Index:
         for old_file in deleted:
             self.graph.remove_file_data(old_file)
 
-        self.graph.resolve_bare_call_targets()
-        self.graph.rebuild_fts_index()
-        self.graph.commit()
+        # Only run expensive post-processing when something actually changed
+        if work_items or deleted:
+            self.graph.resolve_bare_call_targets()
+            self.graph.rebuild_fts_index()
+            self.graph.commit()
+
         elapsed = time.monotonic() - t0
         if work_items or deleted:
             logger.info("Refresh: %d reparsed, %d deleted in %.2fs", len(work_items), len(deleted), elapsed)
