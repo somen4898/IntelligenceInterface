@@ -70,6 +70,29 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
     logger.info("Migration v3: created composite edge index")
 
 
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    """v6: Upgrade idx_edges_composite to UNIQUE for INSERT ON CONFLICT support.
+
+    Deduplicates any existing duplicate edges (keeping the most recent) before
+    creating the UNIQUE index.
+    """
+    # Remove duplicates, keeping the row with the highest id (most recently inserted)
+    conn.execute("""
+        DELETE FROM edges
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM edges
+            GROUP BY kind, source_qualified, target_qualified, file_path, line
+        )
+    """)
+    conn.execute("DROP INDEX IF EXISTS idx_edges_composite")
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_composite
+        ON edges(kind, source_qualified, target_qualified, file_path, line)
+    """)
+    logger.info("Migration v6: upgraded idx_edges_composite to UNIQUE")
+
+
 def _migrate_v4(conn: sqlite3.Connection) -> None:
     """v4: Create FTS5 virtual table for node search."""
     if not _table_exists(conn, "nodes_fts"):
@@ -98,6 +121,7 @@ MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     3: _migrate_v3,
     4: _migrate_v4,
     5: _migrate_v5,
+    6: _migrate_v6,
 }
 
 LATEST_VERSION = max(MIGRATIONS.keys())

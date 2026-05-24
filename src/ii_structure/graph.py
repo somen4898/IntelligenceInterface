@@ -185,21 +185,13 @@ class GraphStore:
         line: int = 0,
     ) -> int:
         now = time.time()
-        existing = self._conn.execute(
-            "SELECT id FROM edges WHERE kind=? AND source_qualified=? AND target_qualified=? AND file_path=? AND line=?",
-            (kind, source_qualified, target_qualified, file_path, line),
-        ).fetchone()
-        if existing:
-            self._conn.execute(
-                "UPDATE edges SET updated_at=? WHERE id=?",
-                (now, existing["id"]),
-            )
-            return existing["id"]
         cur = self._conn.execute(
             """\
             INSERT INTO edges (kind, source_qualified, target_qualified,
                                file_path, line, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, source_qualified, target_qualified, file_path, line)
+            DO UPDATE SET updated_at=excluded.updated_at
             """,
             (kind, source_qualified, target_qualified, file_path, line, now),
         )
