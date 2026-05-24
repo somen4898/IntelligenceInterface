@@ -11,6 +11,22 @@ from ii_structure.parser import SymbolInfo
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+_ENTRY_POINT_NAMES = {
+    "main", "__main__", "__init__", "setup", "teardown",
+    "setUp", "tearDown", "cli", "app", "run", "start",
+    "configure", "register",
+}
+
+_ENTRY_POINT_PREFIXES = ("handle_", "on_", "test_")
+
+_FRAMEWORK_DECORATORS = {
+    "property", "abstractmethod", "staticmethod", "classmethod",
+    "app.route", "app.get", "app.post", "app.put", "app.delete",
+    "cli.command", "click.command", "click.group",
+    "pytest.fixture", "fixture",
+    "override", "overrides",
+}
+
 
 def _sanitize_name(s: str, max_len: int = 256) -> str:
     """Strip ASCII control chars (except tab/newline) and cap length."""
@@ -337,30 +353,60 @@ class GraphStore:
         self, file_path: str | None = None
     ) -> list[dict[str, Any]]:
         """Find function/method nodes with zero incoming CALLS edges."""
-        cur = self._conn.execute(
-            """\
-            SELECT n.* FROM nodes n
-            WHERE n.kind IN ('function', 'method')
-            AND n.qualified_name NOT IN (
-                SELECT target_qualified FROM edges WHERE kind = 'CALLS'
-            )
-            """
+        where = "WHERE n.kind IN ('function', 'method')"
+        params: list[str] = []
+        if file_path:
+            where += " AND n.file_path = ?"
+            params.append(file_path)
+
+        sql = f"""
+        SELECT n.* FROM nodes n
+        {where}
+        AND n.qualified_name NOT IN (
+            SELECT target_qualified FROM edges WHERE kind = 'CALLS'
         )
-        excluded_names = {"main", "__main__", "__init__", "setup", "teardown"}
+        ORDER BY n.file_path, n.line_start
+        """
+        cur = self._conn.execute(sql, params)
         results: list[dict[str, Any]] = []
         for row in cur.fetchall():
             d = dict(row)
             name = d["name"]
             fp = d["file_path"]
-            if name.startswith("test_"):
+
+            # Exclude entry point names
+            if name in _ENTRY_POINT_NAMES:
                 continue
-            if name in excluded_names:
+
+            # Exclude entry point prefixes (test_, handle_, on_)
+            if any(name.startswith(p) for p in _ENTRY_POINT_PREFIXES):
                 continue
+
+            # Exclude test files
             base = fp.rsplit("/", 1)[-1] if "/" in fp else fp
-            if base.startswith("test_") or "/test_" in fp:
+            if base.startswith("test_") or "/test_" in fp or fp.startswith("tests/"):
                 continue
-            if file_path is not None and d["file_path"] != file_path:
+
+            # Exclude dunder methods (invoked by runtime)
+            if name.startswith("__") and name.endswith("__"):
                 continue
+
+            # Exclude constructors (JS/TS)
+            if name == "constructor":
+                continue
+
+            # Exclude conftest.py (pytest fixtures)
+            if fp.endswith("conftest.py"):
+                continue
+
+            # Exclude functions with framework decorators
+            decorators = json.loads(d.get("decorators") or "[]")
+            if decorators and any(
+                any(fd in dec for fd in _FRAMEWORK_DECORATORS)
+                for dec in decorators
+            ):
+                continue
+
             results.append(d)
         return results
 
@@ -471,9 +517,27 @@ class GraphStore:
         resolved = 0
         for edge in bare_edges:
             bare_name = edge["target_qualified"]
-            candidates = name_to_qns.get(bare_name, [])
+
+            # Handle import-qualified targets like "services.create_user"
+            module_hint = None
+            lookup_name = bare_name
+            if "." in bare_name:
+                parts = bare_name.rsplit(".", 1)
+                module_hint = parts[0]
+                lookup_name = parts[1]
+
+            candidates = name_to_qns.get(lookup_name, [])
             if not candidates:
                 continue
+
+            # If we have a module hint, prefer candidates from matching files
+            if module_hint and len(candidates) > 1:
+                hint_matching = [
+                    (qn, fp) for qn, fp in candidates
+                    if module_hint in fp
+                ]
+                if hint_matching:
+                    candidates = hint_matching
 
             if len(candidates) == 1:
                 self._conn.execute(

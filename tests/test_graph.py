@@ -390,6 +390,40 @@ def test_dead_code_excludes_init_main(store):
     assert "main" not in dead_names
 
 
+def test_dead_code_excludes_dunder(store):
+    store.upsert_node(_make_symbol("__str__", kind="method", parent="User"), "models.py", "h")
+    store.commit()
+    dead = store.get_dead_symbols()
+    assert not any(d["name"] == "__str__" for d in dead)
+
+
+def test_dead_code_excludes_decorated(store):
+    sym = _make_symbol("route_handler", kind="function", parent=None)
+    sym = SymbolInfo(
+        name=sym.name, kind=sym.kind, line=sym.line, end_line=sym.end_line,
+        signature=sym.signature, docstring=sym.docstring, parent=sym.parent,
+        children=sym.children, decorators=["app.route"],
+    )
+    store.upsert_node(sym, "app.py", "h")
+    store.commit()
+    dead = store.get_dead_symbols()
+    assert not any(d["name"] == "route_handler" for d in dead)
+
+
+def test_dead_code_excludes_handle_prefix(store):
+    store.upsert_node(_make_symbol("handle_request", kind="function", parent=None), "server.py", "h")
+    store.commit()
+    dead = store.get_dead_symbols()
+    assert not any(d["name"] == "handle_request" for d in dead)
+
+
+def test_dead_code_excludes_conftest(store):
+    store.upsert_node(_make_symbol("my_fixture", kind="function", parent=None), "conftest.py", "h")
+    store.commit()
+    dead = store.get_dead_symbols()
+    assert not any(d["name"] == "my_fixture" for d in dead)
+
+
 # --- Test coverage tests ---
 
 

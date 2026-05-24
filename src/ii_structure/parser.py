@@ -278,6 +278,18 @@ def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo], symb
                     qn = f"{file_path}::{sym.name}"
                 defined_names[sym.name] = qn
 
+    # Build import map: imported_name -> module_path
+    import_map: dict[str, str] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names or []:
+                local_name = alias.asname or alias.name
+                import_map[local_name] = node.module
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                local_name = alias.asname or alias.name
+                import_map[local_name] = alias.name
+
     # IMPORTS edges
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Import):
@@ -294,15 +306,15 @@ def _extract_edges(tree: ast.Module, file_path: str, edges: list[EdgeInfo], symb
                 ))
 
     # Walk all functions/methods for CALLS/TESTED_BY edges
-    _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None, defined_names=defined_names)
+    _extract_calls_recursive(tree, file_path, edges, is_test, parent_class=None, defined_names=defined_names, import_map=import_map)
 
 
-def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None, _depth=0):
+def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=None, defined_names=None, import_map=None, _depth=0):
     if _depth > _MAX_AST_DEPTH:
         return
     for child in ast.iter_child_nodes(node):
         if isinstance(child, ast.ClassDef):
-            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names, _depth=_depth + 1)
+            _extract_calls_recursive(child, file_path, edges, is_test_file, parent_class=child.name, defined_names=defined_names, import_map=import_map, _depth=_depth + 1)
         elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Build source qualified name
             if parent_class:
@@ -319,7 +331,13 @@ def _extract_calls_recursive(node, file_path, edges, is_test_file, parent_class=
                     call_name = _get_call_name(inner_node)
                     if call_name:
                         # Resolve to qualified name if defined in same file
-                        target = defined_names.get(call_name, call_name) if defined_names else call_name
+                        target = call_name
+                        if defined_names and call_name in defined_names:
+                            target = defined_names[call_name]
+                        elif import_map and call_name in import_map:
+                            # Qualify with the module path
+                            module = import_map[call_name]
+                            target = f"{module}.{call_name}"
                         edges.append(EdgeInfo(
                             kind=edge_kind,
                             source=source_qn,
