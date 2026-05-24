@@ -141,3 +141,31 @@ def test_search_symbols_by_name_path(simple_project):
     assert len(results) == 1
     assert results[0]["name"] == "save"
     assert results[0]["parent"] == "User"
+
+
+import subprocess
+
+
+def test_git_ls_files_used_in_git_repo(tmp_path):
+    """In a git repo, _walk_source_files should use git ls-files."""
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp_path, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path, capture_output=True,
+    )
+    tracked = tmp_path / "tracked.py"
+    tracked.write_text("x = 1")
+    untracked = tmp_path / "untracked.py"
+    untracked.write_text("y = 2")
+    subprocess.run(["git", "add", "tracked.py"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+    from ii_structure.index import _walk_source_files
+    files = _walk_source_files(tmp_path, None)
+    names = [f.name for f in files]
+    assert "tracked.py" in names
+    assert "untracked.py" not in names
