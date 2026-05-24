@@ -27,6 +27,8 @@ def get_backend(file_path: str) -> LanguageBackend:
         elif lang == "typescript":
             from ii_structure.backends.typescript import TypeScriptBackend
             _backends[lang] = TypeScriptBackend()
+        else:
+            raise ValueError(f"No backend registered for language: {lang}")
 
     return _backends[lang]
 
