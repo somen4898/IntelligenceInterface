@@ -123,7 +123,8 @@ def test_respects_gitignore(tmp_path):
 
 def test_get_symbols_for_file(simple_project):
     idx = Index.build(simple_project)
-    symbols = idx.get_symbols("models.py")
+    entry = idx.files["models.py"]
+    symbols = entry["symbols"]
     assert any(s["name"] == "User" for s in symbols)
 
 
