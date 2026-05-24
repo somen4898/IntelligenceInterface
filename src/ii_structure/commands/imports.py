@@ -71,8 +71,13 @@ def _resolve_module(module: str, project_files: set[str]) -> str | None:
     candidates.append(parts[-1] + ".py")
 
     for candidate in candidates:
+        # Direct match
         if candidate in project_files:
             return candidate
+        # Match with source prefix (e.g. "src/ii_structure/graph.py")
+        for f in project_files:
+            if f.endswith("/" + candidate):
+                return f
     return None
 
 
