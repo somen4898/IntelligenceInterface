@@ -521,6 +521,75 @@ class GraphStore:
         )
         return [dict(r) for r in cur.fetchall()]
 
+    def batch_get_nodes(self, qualified_names: set[str]) -> list[dict]:
+        """Fetch multiple nodes in one query instead of N get_node calls."""
+        if not qualified_names:
+            return []
+        qn_list = list(qualified_names)
+        batch_size = 450
+        results = []
+        for i in range(0, len(qn_list), batch_size):
+            batch = qn_list[i:i + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._conn.execute(
+                f"SELECT * FROM nodes WHERE qualified_name IN ({placeholders})",  # noqa: S608
+                batch,
+            ).fetchall()
+            results.extend(dict(r) for r in rows)
+        return results
+
+    def rebuild_fts_index(self) -> int:
+        """Rebuild the FTS5 index from the nodes table."""
+        self._conn.execute("DROP TABLE IF EXISTS nodes_fts")
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE nodes_fts USING fts5(
+                name, qualified_name, file_path,
+                content='nodes', content_rowid='id',
+                tokenize='porter unicode61'
+            )
+        """)
+        self._conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
+        self._conn.commit()
+        count = self._conn.execute("SELECT count(*) FROM nodes_fts").fetchone()[0]
+        logger.info("FTS index rebuilt: %d rows", count)
+        return count
+
+    def search_fts(self, query: str, limit: int = 20) -> list[dict]:
+        """Search nodes using FTS5. Falls back to LIKE if FTS5 unavailable."""
+        words = query.split()
+        if not words:
+            return []
+
+        # FTS5 search
+        try:
+            fts_query = " AND ".join(
+                '"' + w.replace('"', '""') + '"' for w in words
+            )
+            rows = self._conn.execute(
+                "SELECT n.* FROM nodes_fts f "
+                "JOIN nodes n ON f.rowid = n.id "
+                "WHERE nodes_fts MATCH ? LIMIT ?",
+                (fts_query, limit),
+            ).fetchall()
+            if rows:
+                return [dict(r) for r in rows]
+        except Exception:
+            pass
+
+        # LIKE fallback
+        conditions = []
+        params: list[str | int] = []
+        for word in words:
+            conditions.append("(LOWER(name) LIKE ? OR LOWER(qualified_name) LIKE ?)")
+            params.extend([f"%{word.lower()}%", f"%{word.lower()}%"])
+        where = " AND ".join(conditions)
+        params.append(limit)
+        rows = self._conn.execute(
+            f"SELECT * FROM nodes WHERE {where} LIMIT ?",  # noqa: S608
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def resolve_bare_call_targets(self) -> int:
         """Post-processing pass to resolve bare call targets."""
         # Find bare CALLS edges

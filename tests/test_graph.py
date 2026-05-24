@@ -571,3 +571,45 @@ def test_remove_file_data_also_removes_aux(store):
     store.upsert_file_aux("foo.py", "[]", None, "h1")
     store.remove_file_data("foo.py")
     assert store.get_file_aux("foo.py") is None
+
+
+def test_batch_get_nodes(store):
+    s1 = _make_symbol(name="alpha", line=1, end_line=3, signature="def alpha():")
+    s2 = _make_symbol(name="beta", line=5, end_line=8, signature="def beta():")
+    store.store_file_nodes_edges("a.py", [s1, s2], [], "h1")
+    qn1 = "a.py::alpha"
+    qn2 = "a.py::beta"
+    results = store.batch_get_nodes({qn1, qn2})
+    assert len(results) == 2
+    names = {r["name"] for r in results}
+    assert names == {"alpha", "beta"}
+
+
+def test_batch_get_nodes_empty(store):
+    results = store.batch_get_nodes(set())
+    assert results == []
+
+
+def test_rebuild_fts_index(store):
+    s1 = _make_symbol(name="parse_file", line=1, end_line=5, signature="def parse_file():")
+    store.store_file_nodes_edges("a.py", [s1], [], "h1")
+    count = store.rebuild_fts_index()
+    assert count == 1
+
+
+def test_search_fts(store):
+    s1 = _make_symbol(name="parse_file", line=1, end_line=5, signature="def parse_file():")
+    s2 = _make_symbol(name="load_config", line=6, end_line=10, signature="def load_config():")
+    store.store_file_nodes_edges("a.py", [s1, s2], [], "h1")
+    store.rebuild_fts_index()
+    results = store.search_fts("parse")
+    assert len(results) >= 1
+    assert results[0]["name"] == "parse_file"
+
+
+def test_search_fts_no_match(store):
+    s1 = _make_symbol(name="foo", line=1, end_line=5, signature="def foo():")
+    store.store_file_nodes_edges("a.py", [s1], [], "h1")
+    store.rebuild_fts_index()
+    results = store.search_fts("zzzznothing")
+    assert results == []
