@@ -295,14 +295,6 @@ class GraphStore:
         )
         return [dict(r) for r in cur.fetchall()]
 
-    def get_edges_by_source(
-        self, qualified_name: str
-    ) -> list[dict[str, Any]]:
-        cur = self._conn.execute(
-            "SELECT * FROM edges WHERE source_qualified = ?", (qualified_name,)
-        )
-        return [dict(r) for r in cur.fetchall()]
-
     def get_edges_by_target(
         self, qualified_name: str
     ) -> list[dict[str, Any]]:
@@ -503,23 +495,6 @@ class GraphStore:
             frontier = next_frontier
 
         return tests
-
-    def search_nodes(
-        self, query: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        """LIKE-based substring search on name, qualified_name, docstring."""
-        pattern = f"%{query.lower()}%"
-        cur = self._conn.execute(
-            """\
-            SELECT * FROM nodes
-            WHERE LOWER(name) LIKE ?
-               OR LOWER(qualified_name) LIKE ?
-               OR LOWER(docstring) LIKE ?
-            LIMIT ?
-            """,
-            (pattern, pattern, pattern, limit),
-        )
-        return [dict(r) for r in cur.fetchall()]
 
     def batch_get_nodes(self, qualified_names: set[str]) -> list[dict]:
         """Fetch multiple nodes in one query instead of N get_node calls."""

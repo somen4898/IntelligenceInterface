@@ -142,7 +142,11 @@ def test_remove_file_data(store):
     store.remove_file_data("f.py")
 
     assert store.get_nodes_by_file("f.py") == []
-    assert store.get_edges_by_source("f.py::a") == []
+    # Verify edges are also removed
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::a",)
+    ).fetchall()
+    assert edges == []
 
 
 # --- 11. test_upsert_edge ---
@@ -163,16 +167,7 @@ def test_get_edges_by_target(store):
     assert kinds == {"calls", "imports"}
 
 
-# --- 13. test_get_edges_by_source ---
-def test_get_edges_by_source(store):
-    store.upsert_edge("calls", "a::foo", "b::bar", "a.py", 10)
-    store.upsert_edge("calls", "a::foo", "c::baz", "a.py", 20)
-
-    edges = store.get_edges_by_source("a::foo")
-    assert len(edges) == 2
-
-
-# --- 14. test_remove_file_data_removes_edges ---
+# --- 13. test_remove_file_data_removes_edges (renumbered) ---
 def test_remove_file_data_removes_edges(store):
     store.upsert_edge("calls", "a::foo", "b::bar", "a.py", 10)
     store.upsert_edge("calls", "a::foo", "c::baz", "a.py", 20)
@@ -180,9 +175,16 @@ def test_remove_file_data_removes_edges(store):
 
     store.remove_file_data("a.py")
 
-    assert store.get_edges_by_source("a::foo") == []
+    # Verify edges from a.py are removed
+    edges_from_a = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("a::foo",)
+    ).fetchall()
+    assert edges_from_a == []
     # edges from other file unaffected
-    assert len(store.get_edges_by_source("x::y")) == 1
+    edges_from_x = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("x::y",)
+    ).fetchall()
+    assert len(edges_from_x) == 1
 
 
 # --- 15. test_store_file_nodes_edges_atomic ---
@@ -202,14 +204,19 @@ def test_store_file_nodes_edges_atomic(store):
 
     # Old data should be gone
     assert store.get_node("f.py::old_fn") is None
-    assert store.get_edges_by_source("f.py::old_fn") == []
+    old_edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::old_fn",)
+    ).fetchall()
+    assert old_edges == []
 
     # New data should be present
     node = store.get_node("f.py::new_fn")
     assert node is not None
     assert node["name"] == "new_fn"
 
-    edges = store.get_edges_by_source("f.py::new_fn")
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::new_fn",)
+    ).fetchall()
     assert len(edges) == 1
     assert edges[0]["kind"] == "imports"
 
@@ -467,30 +474,6 @@ def test_get_transitive_tests_indirect(store):
     assert tests[0]["indirect"] is True
 
 
-# --- Search tests ---
-
-
-def test_search_nodes(store):
-    """Finds authenticate_user when searching 'auth'."""
-    store.upsert_node(
-        _make_symbol(name="authenticate_user", signature="def authenticate_user():"),
-        "auth.py", "h",
-    )
-    store.upsert_node(_make_symbol(name="save"), "models.py", "h")
-
-    results = store.search_nodes("auth")
-    names = {r["name"] for r in results}
-    assert "authenticate_user" in names
-    assert "save" not in names
-
-
-def test_search_nodes_no_match(store):
-    """Returns empty list."""
-    store.upsert_node(_make_symbol(name="foo"), "f.py", "h")
-    results = store.search_nodes("zzz_nonexistent")
-    assert results == []
-
-
 # --- Bare call resolution tests ---
 
 
@@ -510,8 +493,10 @@ def test_resolve_bare_call_targets(store):
     assert resolved >= 1
 
     # The edge should now point to the qualified name
-    edges = store.get_edges_by_source("views.py::handler")
-    call_edges = [e for e in edges if e["kind"] == "CALLS"]
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("views.py::handler",)
+    ).fetchall()
+    call_edges = [dict(e) for e in edges if e["kind"] == "CALLS"]
     targets = {e["target_qualified"] for e in call_edges}
     assert "models.py::User.save" in targets
 
@@ -533,8 +518,10 @@ def test_resolve_bare_ambiguous_leaves_bare(store):
     resolved = store.resolve_bare_call_targets()
     assert resolved == 0
 
-    edges = store.get_edges_by_source("views.py::handler")
-    call_edges = [e for e in edges if e["kind"] == "CALLS"]
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("views.py::handler",)
+    ).fetchall()
+    call_edges = [dict(e) for e in edges if e["kind"] == "CALLS"]
     # Should still be bare
     assert any(e["target_qualified"] == "save" for e in call_edges)
 
