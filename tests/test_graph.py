@@ -79,7 +79,7 @@ def test_schema_version_set(store):
     )
     row = cur.fetchone()
     assert row is not None
-    assert row[0] == "1"
+    assert int(row[0]) >= 1
 
 
 # --- 5. test_upsert_node ---
@@ -537,3 +537,37 @@ def test_resolve_bare_ambiguous_leaves_bare(store):
     call_edges = [e for e in edges if e["kind"] == "CALLS"]
     # Should still be bare
     assert any(e["target_qualified"] == "save" for e in call_edges)
+
+
+def test_upsert_file_aux(store):
+    store.upsert_file_aux("foo.py", '[{"module": "os"}]', None, "abc123")
+    aux = store.get_file_aux("foo.py")
+    assert aux is not None
+    assert aux["imports_json"] == '[{"module": "os"}]'
+    assert aux["content_hash"] == "abc123"
+    assert aux["parse_error"] is None
+
+
+def test_get_file_aux_not_found(store):
+    assert store.get_file_aux("missing.py") is None
+
+
+def test_remove_file_aux(store):
+    store.upsert_file_aux("foo.py", "[]", None, "abc")
+    store.remove_file_aux("foo.py")
+    assert store.get_file_aux("foo.py") is None
+
+
+def test_get_all_file_aux_paths(store):
+    store.upsert_file_aux("a.py", "[]", None, "h1")
+    store.upsert_file_aux("b.py", "[]", None, "h2")
+    paths = store.get_all_file_aux_paths()
+    assert set(paths) == {"a.py", "b.py"}
+
+
+def test_remove_file_data_also_removes_aux(store):
+    sym = _make_symbol(name="foo")
+    store.store_file_nodes_edges("foo.py", [sym], [], "h1")
+    store.upsert_file_aux("foo.py", "[]", None, "h1")
+    store.remove_file_data("foo.py")
+    assert store.get_file_aux("foo.py") is None

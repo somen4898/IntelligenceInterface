@@ -92,12 +92,20 @@ class GraphStore:
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA cache_size=-8000")
+        self._conn.execute("PRAGMA mmap_size=268435456")
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA_SQL)
-        # Set schema version if not already set
-        self._conn.execute(
-            "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '1')"
-        )
+
+        # Run migrations (creates file_aux, FTS5, indexes)
+        from ii_structure.migrations import get_schema_version, run_migrations
+        if get_schema_version(self._conn) < 1:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '1')"
+            )
+            self._conn.commit()
+        run_migrations(self._conn)
 
     def close(self) -> None:
         if self._conn is None:
@@ -200,6 +208,7 @@ class GraphStore:
     def remove_file_data(self, file_path: str) -> None:
         self._conn.execute("DELETE FROM nodes WHERE file_path = ?", (file_path,))
         self._conn.execute("DELETE FROM edges WHERE file_path = ?", (file_path,))
+        self._conn.execute("DELETE FROM file_aux WHERE file_path = ?", (file_path,))
 
     def store_file_nodes_edges(
         self,
@@ -240,6 +249,42 @@ class GraphStore:
         explicit ``BEGIN`` transaction block.
         """
         self._conn.commit()
+
+    def set_metadata(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", (key, value)
+        )
+
+    # --- file_aux CRUD ---
+
+    def upsert_file_aux(
+        self, file_path: str, imports_json: str, parse_error: str | None, content_hash: str
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO file_aux (file_path, imports_json, parse_error, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (file_path, imports_json, parse_error, content_hash),
+        )
+
+    def get_file_aux(self, file_path: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT imports_json, parse_error, content_hash FROM file_aux WHERE file_path = ?",
+            (file_path,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "imports_json": row["imports_json"],
+            "parse_error": row["parse_error"],
+            "content_hash": row["content_hash"],
+        }
+
+    def remove_file_aux(self, file_path: str) -> None:
+        self._conn.execute("DELETE FROM file_aux WHERE file_path = ?", (file_path,))
+
+    def get_all_file_aux_paths(self) -> list[str]:
+        cur = self._conn.execute("SELECT file_path FROM file_aux ORDER BY file_path")
+        return [r[0] for r in cur.fetchall()]
 
     # ---- read operations ----
 
