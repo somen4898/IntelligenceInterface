@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 import pathlib
 from ii_structure.backends.base import LanguageBackend, LANGUAGE_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 
 _backends: dict[str, LanguageBackend] = {}
@@ -18,12 +21,17 @@ def get_backend(file_path: str) -> LanguageBackend:
         if lang == "python":
             from ii_structure.backends.python import PythonBackend
             _backends[lang] = PythonBackend()
+            logger.debug("Loaded %s backend", lang)
         elif lang == "go":
             from ii_structure.backends.golang import GoBackend
             _backends[lang] = GoBackend()
+            logger.debug("Loaded %s backend", lang)
         elif lang == "typescript":
             from ii_structure.backends.typescript import TypeScriptBackend
             _backends[lang] = TypeScriptBackend()
+            logger.debug("Loaded %s backend", lang)
+        else:
+            raise ValueError(f"No backend registered for language: {lang}")
 
     return _backends[lang]
 

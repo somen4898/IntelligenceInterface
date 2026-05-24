@@ -79,7 +79,7 @@ def test_schema_version_set(store):
     )
     row = cur.fetchone()
     assert row is not None
-    assert row[0] == "1"
+    assert int(row[0]) >= 1
 
 
 # --- 5. test_upsert_node ---
@@ -142,7 +142,11 @@ def test_remove_file_data(store):
     store.remove_file_data("f.py")
 
     assert store.get_nodes_by_file("f.py") == []
-    assert store.get_edges_by_source("f.py::a") == []
+    # Verify edges are also removed
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::a",)
+    ).fetchall()
+    assert edges == []
 
 
 # --- 11. test_upsert_edge ---
@@ -163,16 +167,7 @@ def test_get_edges_by_target(store):
     assert kinds == {"calls", "imports"}
 
 
-# --- 13. test_get_edges_by_source ---
-def test_get_edges_by_source(store):
-    store.upsert_edge("calls", "a::foo", "b::bar", "a.py", 10)
-    store.upsert_edge("calls", "a::foo", "c::baz", "a.py", 20)
-
-    edges = store.get_edges_by_source("a::foo")
-    assert len(edges) == 2
-
-
-# --- 14. test_remove_file_data_removes_edges ---
+# --- 13. test_remove_file_data_removes_edges (renumbered) ---
 def test_remove_file_data_removes_edges(store):
     store.upsert_edge("calls", "a::foo", "b::bar", "a.py", 10)
     store.upsert_edge("calls", "a::foo", "c::baz", "a.py", 20)
@@ -180,9 +175,16 @@ def test_remove_file_data_removes_edges(store):
 
     store.remove_file_data("a.py")
 
-    assert store.get_edges_by_source("a::foo") == []
+    # Verify edges from a.py are removed
+    edges_from_a = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("a::foo",)
+    ).fetchall()
+    assert edges_from_a == []
     # edges from other file unaffected
-    assert len(store.get_edges_by_source("x::y")) == 1
+    edges_from_x = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("x::y",)
+    ).fetchall()
+    assert len(edges_from_x) == 1
 
 
 # --- 15. test_store_file_nodes_edges_atomic ---
@@ -202,14 +204,19 @@ def test_store_file_nodes_edges_atomic(store):
 
     # Old data should be gone
     assert store.get_node("f.py::old_fn") is None
-    assert store.get_edges_by_source("f.py::old_fn") == []
+    old_edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::old_fn",)
+    ).fetchall()
+    assert old_edges == []
 
     # New data should be present
     node = store.get_node("f.py::new_fn")
     assert node is not None
     assert node["name"] == "new_fn"
 
-    edges = store.get_edges_by_source("f.py::new_fn")
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("f.py::new_fn",)
+    ).fetchall()
     assert len(edges) == 1
     assert edges[0]["kind"] == "imports"
 
@@ -467,30 +474,6 @@ def test_get_transitive_tests_indirect(store):
     assert tests[0]["indirect"] is True
 
 
-# --- Search tests ---
-
-
-def test_search_nodes(store):
-    """Finds authenticate_user when searching 'auth'."""
-    store.upsert_node(
-        _make_symbol(name="authenticate_user", signature="def authenticate_user():"),
-        "auth.py", "h",
-    )
-    store.upsert_node(_make_symbol(name="save"), "models.py", "h")
-
-    results = store.search_nodes("auth")
-    names = {r["name"] for r in results}
-    assert "authenticate_user" in names
-    assert "save" not in names
-
-
-def test_search_nodes_no_match(store):
-    """Returns empty list."""
-    store.upsert_node(_make_symbol(name="foo"), "f.py", "h")
-    results = store.search_nodes("zzz_nonexistent")
-    assert results == []
-
-
 # --- Bare call resolution tests ---
 
 
@@ -510,8 +493,10 @@ def test_resolve_bare_call_targets(store):
     assert resolved >= 1
 
     # The edge should now point to the qualified name
-    edges = store.get_edges_by_source("views.py::handler")
-    call_edges = [e for e in edges if e["kind"] == "CALLS"]
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("views.py::handler",)
+    ).fetchall()
+    call_edges = [dict(e) for e in edges if e["kind"] == "CALLS"]
     targets = {e["target_qualified"] for e in call_edges}
     assert "models.py::User.save" in targets
 
@@ -533,7 +518,85 @@ def test_resolve_bare_ambiguous_leaves_bare(store):
     resolved = store.resolve_bare_call_targets()
     assert resolved == 0
 
-    edges = store.get_edges_by_source("views.py::handler")
-    call_edges = [e for e in edges if e["kind"] == "CALLS"]
+    edges = store._conn.execute(
+        "SELECT * FROM edges WHERE source_qualified = ?", ("views.py::handler",)
+    ).fetchall()
+    call_edges = [dict(e) for e in edges if e["kind"] == "CALLS"]
     # Should still be bare
     assert any(e["target_qualified"] == "save" for e in call_edges)
+
+
+def test_upsert_file_aux(store):
+    store.upsert_file_aux("foo.py", '[{"module": "os"}]', None, "abc123")
+    aux = store.get_file_aux("foo.py")
+    assert aux is not None
+    assert aux["imports_json"] == '[{"module": "os"}]'
+    assert aux["content_hash"] == "abc123"
+    assert aux["parse_error"] is None
+
+
+def test_get_file_aux_not_found(store):
+    assert store.get_file_aux("missing.py") is None
+
+
+def test_remove_file_aux(store):
+    store.upsert_file_aux("foo.py", "[]", None, "abc")
+    store.remove_file_aux("foo.py")
+    assert store.get_file_aux("foo.py") is None
+
+
+def test_get_all_file_aux_paths(store):
+    store.upsert_file_aux("a.py", "[]", None, "h1")
+    store.upsert_file_aux("b.py", "[]", None, "h2")
+    paths = store.get_all_file_aux_paths()
+    assert set(paths) == {"a.py", "b.py"}
+
+
+def test_remove_file_data_also_removes_aux(store):
+    sym = _make_symbol(name="foo")
+    store.store_file_nodes_edges("foo.py", [sym], [], "h1")
+    store.upsert_file_aux("foo.py", "[]", None, "h1")
+    store.remove_file_data("foo.py")
+    assert store.get_file_aux("foo.py") is None
+
+
+def test_batch_get_nodes(store):
+    s1 = _make_symbol(name="alpha", line=1, end_line=3, signature="def alpha():")
+    s2 = _make_symbol(name="beta", line=5, end_line=8, signature="def beta():")
+    store.store_file_nodes_edges("a.py", [s1, s2], [], "h1")
+    qn1 = "a.py::alpha"
+    qn2 = "a.py::beta"
+    results = store.batch_get_nodes({qn1, qn2})
+    assert len(results) == 2
+    names = {r["name"] for r in results}
+    assert names == {"alpha", "beta"}
+
+
+def test_batch_get_nodes_empty(store):
+    results = store.batch_get_nodes(set())
+    assert results == []
+
+
+def test_rebuild_fts_index(store):
+    s1 = _make_symbol(name="parse_file", line=1, end_line=5, signature="def parse_file():")
+    store.store_file_nodes_edges("a.py", [s1], [], "h1")
+    count = store.rebuild_fts_index()
+    assert count == 1
+
+
+def test_search_fts(store):
+    s1 = _make_symbol(name="parse_file", line=1, end_line=5, signature="def parse_file():")
+    s2 = _make_symbol(name="load_config", line=6, end_line=10, signature="def load_config():")
+    store.store_file_nodes_edges("a.py", [s1, s2], [], "h1")
+    store.rebuild_fts_index()
+    results = store.search_fts("parse")
+    assert len(results) >= 1
+    assert results[0]["name"] == "parse_file"
+
+
+def test_search_fts_no_match(store):
+    s1 = _make_symbol(name="foo", line=1, end_line=5, signature="def foo():")
+    store.store_file_nodes_edges("a.py", [s1], [], "h1")
+    store.rebuild_fts_index()
+    results = store.search_fts("zzzznothing")
+    assert results == []

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
 from typing import Any
 
 from ii_structure.parser import SymbolInfo
+
+logger = logging.getLogger(__name__)
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -87,14 +90,28 @@ class GraphStore:
             check_same_thread=False,
             isolation_level=None,
         )
+        self._conn.row_factory = sqlite3.Row
+        self._configure_connection()
+        self._init_schema()
+
+    def _configure_connection(self) -> None:
+        """Set PRAGMAs for correctness and performance."""
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA cache_size=-8000")
+        self._conn.execute("PRAGMA mmap_size=268435456")
+
+    def _init_schema(self) -> None:
+        """Create base tables and run pending migrations."""
         self._conn.executescript(_SCHEMA_SQL)
-        # Set schema version if not already set
-        self._conn.execute(
-            "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '1')"
-        )
+        from ii_structure.migrations import get_schema_version, run_migrations
+        if get_schema_version(self._conn) < 1:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO metadata (key, value) VALUES ('schema_version', '1')"
+            )
+            self._conn.commit()
+        run_migrations(self._conn)
 
     def close(self) -> None:
         if self._conn is None:
@@ -174,21 +191,13 @@ class GraphStore:
         line: int = 0,
     ) -> int:
         now = time.time()
-        existing = self._conn.execute(
-            "SELECT id FROM edges WHERE kind=? AND source_qualified=? AND target_qualified=? AND file_path=? AND line=?",
-            (kind, source_qualified, target_qualified, file_path, line),
-        ).fetchone()
-        if existing:
-            self._conn.execute(
-                "UPDATE edges SET updated_at=? WHERE id=?",
-                (now, existing["id"]),
-            )
-            return existing["id"]
         cur = self._conn.execute(
             """\
             INSERT INTO edges (kind, source_qualified, target_qualified,
                                file_path, line, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, source_qualified, target_qualified, file_path, line)
+            DO UPDATE SET updated_at=excluded.updated_at
             """,
             (kind, source_qualified, target_qualified, file_path, line, now),
         )
@@ -197,6 +206,7 @@ class GraphStore:
     def remove_file_data(self, file_path: str) -> None:
         self._conn.execute("DELETE FROM nodes WHERE file_path = ?", (file_path,))
         self._conn.execute("DELETE FROM edges WHERE file_path = ?", (file_path,))
+        self._conn.execute("DELETE FROM file_aux WHERE file_path = ?", (file_path,))
 
     def store_file_nodes_edges(
         self,
@@ -238,6 +248,42 @@ class GraphStore:
         """
         self._conn.commit()
 
+    def set_metadata(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", (key, value)
+        )
+
+    # --- file_aux CRUD ---
+
+    def upsert_file_aux(
+        self, file_path: str, imports_json: str, parse_error: str | None, content_hash: str
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO file_aux (file_path, imports_json, parse_error, content_hash) "
+            "VALUES (?, ?, ?, ?)",
+            (file_path, imports_json, parse_error, content_hash),
+        )
+
+    def get_file_aux(self, file_path: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT imports_json, parse_error, content_hash FROM file_aux WHERE file_path = ?",
+            (file_path,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "imports_json": row["imports_json"],
+            "parse_error": row["parse_error"],
+            "content_hash": row["content_hash"],
+        }
+
+    def remove_file_aux(self, file_path: str) -> None:
+        self._conn.execute("DELETE FROM file_aux WHERE file_path = ?", (file_path,))
+
+    def get_all_file_aux_paths(self) -> list[str]:
+        cur = self._conn.execute("SELECT file_path FROM file_aux ORDER BY file_path")
+        return [r[0] for r in cur.fetchall()]
+
     # ---- read operations ----
 
     def get_node(self, qualified_name: str) -> dict[str, Any] | None:
@@ -252,14 +298,6 @@ class GraphStore:
     def get_nodes_by_file(self, file_path: str) -> list[dict[str, Any]]:
         cur = self._conn.execute(
             "SELECT * FROM nodes WHERE file_path = ?", (file_path,)
-        )
-        return [dict(r) for r in cur.fetchall()]
-
-    def get_edges_by_source(
-        self, qualified_name: str
-    ) -> list[dict[str, Any]]:
-        cur = self._conn.execute(
-            "SELECT * FROM edges WHERE source_qualified = ?", (qualified_name,)
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -290,7 +328,13 @@ class GraphStore:
         max_depth: int = 3,
         max_nodes: int = 200,
     ) -> dict[str, Any]:
-        """Blast radius via recursive CTE."""
+        """Blast radius via recursive CTE.
+
+        Walks both directions intentionally: callers (who depends on this?)
+        AND callees (what does this depend on?) are both part of the impact
+        surface. A change can break callers AND can be affected by changes
+        to its own dependencies.
+        """
         seed = self.get_node(qualified_name)
         if seed is None:
             return {
@@ -327,21 +371,24 @@ class GraphStore:
             (max_depth, max_depth, max_nodes),
         ).fetchall()
 
+        impacted_qns = {r["node_qn"] for r in rows if r["node_qn"] != qualified_name}
+        batch_results = self.batch_get_nodes(impacted_qns)
+
         impacted_nodes: list[dict[str, Any]] = []
         impacted_files: set[str] = set()
-        for row in rows:
-            qn = row["node_qn"]
-            depth = row["min_depth"]
-            if qn == qualified_name:
-                continue
-            node = self.get_node(qn)
-            if node is not None:
-                node["depth"] = depth
-                impacted_nodes.append(node)
-                impacted_files.add(node["file_path"])
+
+        # Build depth map
+        depth_map = {r["node_qn"]: r["min_depth"] for r in rows}
+
+        for node in batch_results:
+            qn = node["qualified_name"]
+            node["depth"] = depth_map.get(qn, 0)
+            impacted_nodes.append(node)
+            impacted_files.add(node["file_path"])
 
         self._conn.execute("DROP TABLE IF EXISTS _impact_seeds")
 
+        logger.debug("Blast radius for %s: %d impacted nodes, %d files", qualified_name, len(impacted_nodes), len(impacted_files))
         return {
             "changed_node": seed,
             "impacted_nodes": impacted_nodes,
@@ -408,78 +455,127 @@ class GraphStore:
                 continue
 
             results.append(d)
+        logger.debug("Dead code: %d candidates after filtering", len(results))
         return results
 
     def get_transitive_tests(
         self, qualified_name: str, max_depth: int = 2
     ) -> list[dict[str, Any]]:
-        """Find test coverage (direct and transitive)."""
-        tests: list[dict[str, Any]] = []
-        seen: set[str] = set()
-
-        # Direct: TESTED_BY edges targeting this node
-        direct_edges = self._conn.execute(
+        """Find test coverage (direct and transitive) via recursive CTE."""
+        # Direct TESTED_BY
+        direct_rows = self._conn.execute(
             "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
             (qualified_name,),
         ).fetchall()
-        for row in direct_edges:
-            src_qn = row["source_qualified"]
-            if src_qn in seen:
-                continue
-            seen.add(src_qn)
-            node = self.get_node(src_qn)
-            if node is not None:
-                node["indirect"] = False
-                tests.append(node)
 
-        # Transitive: BFS callers up to max_depth, then collect TESTED_BY
-        frontier = {qualified_name}
-        for _depth in range(max_depth):
-            next_frontier: set[str] = set()
-            for qn in frontier:
-                callers = self._conn.execute(
-                    "SELECT source_qualified FROM edges WHERE kind = 'CALLS' AND target_qualified = ?",
-                    (qn,),
-                ).fetchall()
-                for crow in callers:
-                    caller_qn = crow["source_qualified"]
-                    if caller_qn in seen:
-                        continue
-                    next_frontier.add(caller_qn)
-                    # Check if this caller has TESTED_BY edges
-                    tested_edges = self._conn.execute(
-                        "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
-                        (caller_qn,),
-                    ).fetchall()
-                    for trow in tested_edges:
-                        test_qn = trow["source_qualified"]
-                        if test_qn in seen:
-                            continue
-                        seen.add(test_qn)
-                        node = self.get_node(test_qn)
-                        if node is not None:
-                            node["indirect"] = True
-                            tests.append(node)
-            frontier = next_frontier
+        test_qns: dict[str, bool] = {}  # qn -> indirect
+        for row in direct_rows:
+            test_qns[row[0]] = False
 
+        # Transitive: find callers via CTE, then their TESTED_BY edges
+        if max_depth > 0:
+            cte_rows = self._conn.execute(
+                """\
+                WITH RECURSIVE callers(qn, depth) AS (
+                    SELECT ?, 0
+                    UNION
+                    SELECT e.source_qualified, c.depth + 1
+                    FROM callers c JOIN edges e ON e.target_qualified = c.qn
+                    WHERE e.kind = 'CALLS' AND c.depth < ?
+                )
+                SELECT DISTINCT e.source_qualified
+                FROM callers c
+                JOIN edges e ON e.target_qualified = c.qn
+                WHERE e.kind = 'TESTED_BY' AND c.depth > 0
+                """,
+                (qualified_name, max_depth),
+            ).fetchall()
+            for row in cte_rows:
+                if row[0] not in test_qns:
+                    test_qns[row[0]] = True
+
+        if not test_qns:
+            return []
+
+        # Batch fetch test nodes
+        batch = self.batch_get_nodes(set(test_qns.keys()))
+        tests: list[dict[str, Any]] = []
+        for node in batch:
+            node["indirect"] = test_qns.get(node["qualified_name"], True)
+            tests.append(node)
+        direct = sum(1 for v in test_qns.values() if not v)
+        indirect = sum(1 for v in test_qns.values() if v)
+        logger.debug("Test coverage for %s: %d direct, %d indirect", qualified_name, direct, indirect)
         return tests
 
-    def search_nodes(
-        self, query: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        """LIKE-based substring search on name, qualified_name, docstring."""
-        pattern = f"%{query.lower()}%"
-        cur = self._conn.execute(
-            """\
-            SELECT * FROM nodes
-            WHERE LOWER(name) LIKE ?
-               OR LOWER(qualified_name) LIKE ?
-               OR LOWER(docstring) LIKE ?
-            LIMIT ?
-            """,
-            (pattern, pattern, pattern, limit),
-        )
-        return [dict(r) for r in cur.fetchall()]
+    def batch_get_nodes(self, qualified_names: set[str]) -> list[dict]:
+        """Fetch multiple nodes in one query instead of N get_node calls."""
+        if not qualified_names:
+            return []
+        qn_list = list(qualified_names)
+        batch_size = 450
+        results = []
+        for i in range(0, len(qn_list), batch_size):
+            batch = qn_list[i:i + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self._conn.execute(
+                f"SELECT * FROM nodes WHERE qualified_name IN ({placeholders})",  # noqa: S608
+                batch,
+            ).fetchall()
+            results.extend(dict(r) for r in rows)
+        return results
+
+    def rebuild_fts_index(self) -> int:
+        """Rebuild the FTS5 index from the nodes table."""
+        self._conn.execute("DROP TABLE IF EXISTS nodes_fts")
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE nodes_fts USING fts5(
+                name, qualified_name, file_path,
+                content='nodes', content_rowid='id',
+                tokenize='porter unicode61'
+            )
+        """)
+        self._conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
+        self._conn.commit()
+        count = self._conn.execute("SELECT count(*) FROM nodes_fts").fetchone()[0]
+        logger.info("FTS index rebuilt: %d rows", count)
+        return count
+
+    def search_fts(self, query: str, limit: int = 20) -> list[dict]:
+        """Search nodes using FTS5. Falls back to LIKE if FTS5 unavailable."""
+        words = query.split()
+        if not words:
+            return []
+
+        # FTS5 search
+        try:
+            fts_query = " AND ".join(
+                '"' + w.replace('"', '""') + '"' for w in words
+            )
+            rows = self._conn.execute(
+                "SELECT n.* FROM nodes_fts f "
+                "JOIN nodes n ON f.rowid = n.id "
+                "WHERE nodes_fts MATCH ? LIMIT ?",
+                (fts_query, limit),
+            ).fetchall()
+            if rows:
+                return [dict(r) for r in rows]
+        except Exception:
+            pass
+
+        # LIKE fallback
+        conditions = []
+        params: list[str | int] = []
+        for word in words:
+            conditions.append("(LOWER(name) LIKE ? OR LOWER(qualified_name) LIKE ?)")
+            params.extend([f"%{word.lower()}%", f"%{word.lower()}%"])
+        where = " AND ".join(conditions)
+        params.append(limit)
+        rows = self._conn.execute(
+            f"SELECT * FROM nodes WHERE {where} LIMIT ?",  # noqa: S608
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def resolve_bare_call_targets(self) -> int:
         """Post-processing pass to resolve bare call targets."""
@@ -492,6 +588,7 @@ class GraphStore:
         if not bare_edges:
             return 0
 
+        logger.debug("Resolving %d bare call targets", len(bare_edges))
         # Build name → [qualified_names] lookup
         all_nodes = self._conn.execute(
             "SELECT name, qualified_name, file_path FROM nodes"
@@ -559,4 +656,5 @@ class GraphStore:
                     )
                     resolved += 1
 
+        logger.info("Resolved %d/%d bare call targets", resolved, len(bare_edges))
         return resolved

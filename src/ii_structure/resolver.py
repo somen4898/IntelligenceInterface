@@ -1,10 +1,11 @@
+import logging
 import pathlib
+
+import jedi
+
 from ii_structure.index import Index
 
-try:
-    import jedi
-except ImportError:
-    jedi = None
+logger = logging.getLogger(__name__)
 
 
 def get_definition_source(
@@ -16,6 +17,7 @@ def get_definition_source(
     root = pathlib.Path(project_root)
 
     candidates = index.search_symbols(name)
+    logger.debug("Resolving %s: %d candidates", name, len(candidates))
     if not candidates:
         return None
 
@@ -29,22 +31,22 @@ def get_definition_source(
         return _read_symbol_source(root, candidates[0])
 
     # Multiple candidates -- use Jedi to resolve if possible
-    if jedi is not None:
-        project = jedi.Project(path=str(root))
-        for candidate in candidates:
-            file_path = root / candidate["file"]
-            if not file_path.exists():
-                continue
-            source = file_path.read_text(encoding="utf-8", errors="replace")
-            script = jedi.Script(source, path=str(file_path), project=project)
-            try:
-                defs = script.goto(line=candidate["line"], column=len("def "))
-                if defs:
-                    return _read_symbol_source(root, candidate)
-            except Exception:
-                continue
+    project = jedi.Project(path=str(root))
+    for candidate in candidates:
+        file_path = root / candidate["file"]
+        if not file_path.exists():
+            continue
+        source = file_path.read_text(encoding="utf-8", errors="replace")
+        script = jedi.Script(source, path=str(file_path), project=project)
+        try:
+            defs = script.goto(line=candidate["line"], column=len("def "))
+            if defs:
+                return _read_symbol_source(root, candidate)
+        except Exception:
+            continue
 
     # Fallback: return first candidate
+    logger.debug("Resolving %s: using fallback (first candidate)", name)
     return _read_symbol_source(root, candidates[0])
 
 
