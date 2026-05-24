@@ -257,19 +257,30 @@ class Index:
     # -- queries (public API) -----------------------------------------------
 
     def search_symbols(self, name_path: str) -> list[dict]:
-        """Search by name path — same matching logic as before."""
-        results = []
+        """Search by name path — FTS5 first, then exact match fallback."""
         parts = name_path.strip("/").split("/")
 
-        for rel_path in self.graph.get_all_files():
-            for node in self.graph.get_nodes_by_file(rel_path):
-                sym = _node_to_symbol(node)
-                sym["file"] = rel_path
+        # Fast path: single name — use indexed SQL lookup
+        if len(parts) == 1:
+            name = parts[0]
+            rows = self.graph._conn.execute(
+                "SELECT * FROM nodes WHERE name = ?", (name,)
+            ).fetchall()
+            if rows:
+                results = []
+                for node in rows:
+                    sym = _node_to_symbol(dict(node))
+                    sym["file"] = node["file_path"]
+                    results.append(sym)
+                return results
 
-                if len(parts) == 1:
-                    if sym["name"] == parts[0]:
-                        results.append(sym)
-                elif len(parts) == 2:
+        # Multi-part path: Parent/child lookup
+        if len(parts) == 2:
+            results = []
+            for rel_path in self.graph.get_all_files():
+                for node in self.graph.get_nodes_by_file(rel_path):
+                    sym = _node_to_symbol(node)
+                    sym["file"] = rel_path
                     parent = sym.get("parent") or ""
                     parent_match = (
                         parent == parts[0]
@@ -277,13 +288,19 @@ class Index:
                     )
                     if sym["name"] == parts[-1] and parent_match:
                         results.append(sym)
-                else:
-                    full_path = sym["name"]
-                    if sym.get("parent"):
-                        full_path = f"{sym['parent']}/{sym['name']}"
-                    if full_path == name_path.strip("/"):
-                        results.append(sym)
+            return results
 
+        # N-part path: full path match
+        results = []
+        for rel_path in self.graph.get_all_files():
+            for node in self.graph.get_nodes_by_file(rel_path):
+                sym = _node_to_symbol(node)
+                sym["file"] = rel_path
+                full_path = sym["name"]
+                if sym.get("parent"):
+                    full_path = f"{sym['parent']}/{sym['name']}"
+                if full_path == name_path.strip("/"):
+                    results.append(sym)
         return results
 
 
