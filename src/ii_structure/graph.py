@@ -322,7 +322,13 @@ class GraphStore:
         max_depth: int = 3,
         max_nodes: int = 200,
     ) -> dict[str, Any]:
-        """Blast radius via recursive CTE."""
+        """Blast radius via recursive CTE.
+
+        Walks both directions intentionally: callers (who depends on this?)
+        AND callees (what does this depend on?) are both part of the impact
+        surface. A change can break callers AND can be affected by changes
+        to its own dependencies.
+        """
         seed = self.get_node(qualified_name)
         if seed is None:
             return {
@@ -359,18 +365,20 @@ class GraphStore:
             (max_depth, max_depth, max_nodes),
         ).fetchall()
 
+        impacted_qns = {r["node_qn"] for r in rows if r["node_qn"] != qualified_name}
+        batch_results = self.batch_get_nodes(impacted_qns)
+
         impacted_nodes: list[dict[str, Any]] = []
         impacted_files: set[str] = set()
-        for row in rows:
-            qn = row["node_qn"]
-            depth = row["min_depth"]
-            if qn == qualified_name:
-                continue
-            node = self.get_node(qn)
-            if node is not None:
-                node["depth"] = depth
-                impacted_nodes.append(node)
-                impacted_files.add(node["file_path"])
+
+        # Build depth map
+        depth_map = {r["node_qn"]: r["min_depth"] for r in rows}
+
+        for node in batch_results:
+            qn = node["qualified_name"]
+            node["depth"] = depth_map.get(qn, 0)
+            impacted_nodes.append(node)
+            impacted_files.add(node["file_path"])
 
         self._conn.execute("DROP TABLE IF EXISTS _impact_seeds")
 
