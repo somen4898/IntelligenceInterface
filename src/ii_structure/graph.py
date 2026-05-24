@@ -453,55 +453,48 @@ class GraphStore:
     def get_transitive_tests(
         self, qualified_name: str, max_depth: int = 2
     ) -> list[dict[str, Any]]:
-        """Find test coverage (direct and transitive)."""
-        tests: list[dict[str, Any]] = []
-        seen: set[str] = set()
-
-        # Direct: TESTED_BY edges targeting this node
-        direct_edges = self._conn.execute(
+        """Find test coverage (direct and transitive) via recursive CTE."""
+        # Direct TESTED_BY
+        direct_rows = self._conn.execute(
             "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
             (qualified_name,),
         ).fetchall()
-        for row in direct_edges:
-            src_qn = row["source_qualified"]
-            if src_qn in seen:
-                continue
-            seen.add(src_qn)
-            node = self.get_node(src_qn)
-            if node is not None:
-                node["indirect"] = False
-                tests.append(node)
 
-        # Transitive: BFS callers up to max_depth, then collect TESTED_BY
-        frontier = {qualified_name}
-        for _depth in range(max_depth):
-            next_frontier: set[str] = set()
-            for qn in frontier:
-                callers = self._conn.execute(
-                    "SELECT source_qualified FROM edges WHERE kind = 'CALLS' AND target_qualified = ?",
-                    (qn,),
-                ).fetchall()
-                for crow in callers:
-                    caller_qn = crow["source_qualified"]
-                    if caller_qn in seen:
-                        continue
-                    next_frontier.add(caller_qn)
-                    # Check if this caller has TESTED_BY edges
-                    tested_edges = self._conn.execute(
-                        "SELECT source_qualified FROM edges WHERE kind = 'TESTED_BY' AND target_qualified = ?",
-                        (caller_qn,),
-                    ).fetchall()
-                    for trow in tested_edges:
-                        test_qn = trow["source_qualified"]
-                        if test_qn in seen:
-                            continue
-                        seen.add(test_qn)
-                        node = self.get_node(test_qn)
-                        if node is not None:
-                            node["indirect"] = True
-                            tests.append(node)
-            frontier = next_frontier
+        test_qns: dict[str, bool] = {}  # qn -> indirect
+        for row in direct_rows:
+            test_qns[row[0]] = False
 
+        # Transitive: find callers via CTE, then their TESTED_BY edges
+        if max_depth > 0:
+            cte_rows = self._conn.execute(
+                """\
+                WITH RECURSIVE callers(qn, depth) AS (
+                    SELECT ?, 0
+                    UNION
+                    SELECT e.source_qualified, c.depth + 1
+                    FROM callers c JOIN edges e ON e.target_qualified = c.qn
+                    WHERE e.kind = 'CALLS' AND c.depth < ?
+                )
+                SELECT DISTINCT e.source_qualified
+                FROM callers c
+                JOIN edges e ON e.target_qualified = c.qn
+                WHERE e.kind = 'TESTED_BY' AND c.depth > 0
+                """,
+                (qualified_name, max_depth),
+            ).fetchall()
+            for row in cte_rows:
+                if row[0] not in test_qns:
+                    test_qns[row[0]] = True
+
+        if not test_qns:
+            return []
+
+        # Batch fetch test nodes
+        batch = self.batch_get_nodes(set(test_qns.keys()))
+        tests: list[dict[str, Any]] = []
+        for node in batch:
+            node["indirect"] = test_qns.get(node["qualified_name"], True)
+            tests.append(node)
         return tests
 
     def batch_get_nodes(self, qualified_names: set[str]) -> list[dict]:
