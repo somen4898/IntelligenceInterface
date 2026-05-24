@@ -90,15 +90,21 @@ class GraphStore:
             check_same_thread=False,
             isolation_level=None,
         )
+        self._conn.row_factory = sqlite3.Row
+        self._configure_connection()
+        self._init_schema()
+
+    def _configure_connection(self) -> None:
+        """Set PRAGMAs for correctness and performance."""
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA cache_size=-8000")
         self._conn.execute("PRAGMA mmap_size=268435456")
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA_SQL)
 
-        # Run migrations (creates file_aux, FTS5, indexes)
+    def _init_schema(self) -> None:
+        """Create base tables and run pending migrations."""
+        self._conn.executescript(_SCHEMA_SQL)
         from ii_structure.migrations import get_schema_version, run_migrations
         if get_schema_version(self._conn) < 1:
             self._conn.execute(
