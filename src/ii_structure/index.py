@@ -5,6 +5,7 @@ import logging
 import os
 import pathlib
 import sqlite3
+import time
 from dataclasses import asdict
 
 import pathspec
@@ -186,6 +187,8 @@ class Index:
     @classmethod
     def build(cls, root: pathlib.Path) -> "Index":
         root = root.resolve()
+        t0 = time.monotonic()
+        logger.info("Building index for %s", root)
         state_dir = root / ".ii-structure"
         state_dir.mkdir(parents=True, exist_ok=True)
         db_path = state_dir / "graph.db"
@@ -194,6 +197,7 @@ class Index:
         gitignore_spec = _load_gitignore(root)
         source_files = _walk_source_files(root, gitignore_spec)
 
+        logger.debug("Discovered %d source files", len(source_files))
         # Read all files and prepare work items
         work_items = []
         for source_file in source_files:
@@ -212,6 +216,8 @@ class Index:
         else:
             parse_results = [_parse_file_worker(item) for item in work_items]
 
+        parsed_count = sum(1 for p in parse_results if p is not None)
+        logger.debug("Parsed %d/%d files", parsed_count, len(work_items))
         for parsed in parse_results:
             if parsed is None:
                 continue
@@ -224,6 +230,8 @@ class Index:
         graph.rebuild_fts_index()
         graph.set_metadata("project_root", str(root))
         graph.commit()
+        elapsed = time.monotonic() - t0
+        logger.info("Index built: %d files in %.2fs", parsed_count, elapsed)
         return cls(project_root=str(root), graph=graph)
 
     @classmethod
@@ -261,6 +269,7 @@ class Index:
 
     def refresh(self, root: pathlib.Path) -> None:
         root = root.resolve()
+        t0 = time.monotonic()
         gitignore_spec = _load_gitignore(root)
         current_files: set[str] = set()
         existing_files = set(self.graph.get_all_files())
@@ -285,6 +294,8 @@ class Index:
 
             work_items.append((rel, str(source_file), content))
 
+        deleted = existing_files - current_files
+        logger.debug("Refresh: %d files scanned, %d changed, %d deleted", len(current_files), len(work_items), len(deleted))
         # Parse changed files in parallel, store sequentially
         if len(work_items) > 10:
             with concurrent.futures.ProcessPoolExecutor(max_workers=_MAX_PARSE_WORKERS) as pool:
@@ -300,12 +311,17 @@ class Index:
             imports_json = json.dumps([asdict(i) for i in result.imports])
             self.graph.upsert_file_aux(rel, imports_json, result.error, fhash)
 
-        for old_file in existing_files - current_files:
+        for old_file in deleted:
             self.graph.remove_file_data(old_file)
 
         self.graph.resolve_bare_call_targets()
         self.graph.rebuild_fts_index()
         self.graph.commit()
+        elapsed = time.monotonic() - t0
+        if work_items or deleted:
+            logger.info("Refresh: %d reparsed, %d deleted in %.2fs", len(work_items), len(deleted), elapsed)
+        else:
+            logger.debug("Refresh: no changes (%.2fs)", elapsed)
         self._invalidate_cache()
 
     # -- queries (public API) -----------------------------------------------
@@ -363,6 +379,7 @@ class Index:
 # ---------------------------------------------------------------------------
 
 def load_or_build_index(root: pathlib.Path) -> Index:
+    logger.debug("load_or_build_index: %s", root)
     state_dir = root / ".ii-structure"
     db_path = state_dir / "graph.db"
 
@@ -371,6 +388,7 @@ def load_or_build_index(root: pathlib.Path) -> Index:
     if json_path.exists() and not db_path.exists():
         idx = Index.build(root)
         json_path.unlink()
+        logger.debug("Built fresh index")
         return idx
 
     if db_path.exists():
@@ -378,12 +396,14 @@ def load_or_build_index(root: pathlib.Path) -> Index:
             idx = Index.load(state_dir)
             idx.refresh(root)
             idx.save(state_dir)
+            logger.debug("Loaded and refreshed existing index")
             return idx
         except (FileNotFoundError, sqlite3.OperationalError) as exc:
             logger.warning("Failed to load index, rebuilding: %s", exc)
 
     idx = Index.build(root)
     idx.save(state_dir)
+    logger.debug("Built fresh index")
     return idx
 
 
@@ -431,7 +451,9 @@ def _walk_source_files(
                         continue
                     if path.is_file():
                         files.append(path)
-                return sorted(files)
+                files = sorted(files)
+                logger.debug("File discovery via git ls-files: %d files", len(files))
+                return files
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
             logger.warning("git ls-files failed, falling back to rglob: %s", exc)
 
@@ -449,4 +471,5 @@ def _walk_source_files(
         if gitignore_spec and gitignore_spec.match_file(str(rel)):
             continue
         files.append(path)
+    logger.debug("File discovery via rglob: %d files", len(files))
     return files

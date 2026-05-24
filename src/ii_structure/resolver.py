@@ -17,6 +17,7 @@ def get_definition_source(
     root = pathlib.Path(project_root)
 
     candidates = index.search_symbols(name)
+    logger.debug("Resolving %s: %d candidates", name, len(candidates))
     if not candidates:
         return None
 
@@ -45,6 +46,7 @@ def get_definition_source(
             continue
 
     # Fallback: return first candidate
+    logger.debug("Resolving %s: using fallback (first candidate)", name)
     return _read_symbol_source(root, candidates[0])
 
 

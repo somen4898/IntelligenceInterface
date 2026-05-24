@@ -388,6 +388,7 @@ class GraphStore:
 
         self._conn.execute("DROP TABLE IF EXISTS _impact_seeds")
 
+        logger.debug("Blast radius for %s: %d impacted nodes, %d files", qualified_name, len(impacted_nodes), len(impacted_files))
         return {
             "changed_node": seed,
             "impacted_nodes": impacted_nodes,
@@ -454,6 +455,7 @@ class GraphStore:
                 continue
 
             results.append(d)
+        logger.debug("Dead code: %d candidates after filtering", len(results))
         return results
 
     def get_transitive_tests(
@@ -501,6 +503,9 @@ class GraphStore:
         for node in batch:
             node["indirect"] = test_qns.get(node["qualified_name"], True)
             tests.append(node)
+        direct = sum(1 for v in test_qns.values() if not v)
+        indirect = sum(1 for v in test_qns.values() if v)
+        logger.debug("Test coverage for %s: %d direct, %d indirect", qualified_name, direct, indirect)
         return tests
 
     def batch_get_nodes(self, qualified_names: set[str]) -> list[dict]:
@@ -583,6 +588,7 @@ class GraphStore:
         if not bare_edges:
             return 0
 
+        logger.debug("Resolving %d bare call targets", len(bare_edges))
         # Build name → [qualified_names] lookup
         all_nodes = self._conn.execute(
             "SELECT name, qualified_name, file_path FROM nodes"
@@ -650,4 +656,5 @@ class GraphStore:
                     )
                     resolved += 1
 
+        logger.info("Resolved %d/%d bare call targets", resolved, len(bare_edges))
         return resolved
