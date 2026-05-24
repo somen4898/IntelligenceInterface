@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 import pathlib
 from ii_structure.backends.base import LanguageBackend, LANGUAGE_EXTENSIONS
+
+logger = logging.getLogger(__name__)
 
 
 _backends: dict[str, LanguageBackend] = {}

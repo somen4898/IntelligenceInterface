@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import time
 from typing import Any
 
 from ii_structure.parser import SymbolInfo
+
+logger = logging.getLogger(__name__)
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 

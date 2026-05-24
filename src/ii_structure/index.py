@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import pathlib
 from dataclasses import asdict
 
@@ -7,6 +8,8 @@ import pathspec
 
 from ii_structure.backends import get_backend, supported_extensions
 from ii_structure.graph import GraphStore
+
+logger = logging.getLogger(__name__)
 
 INDEX_VERSION = 1
 SKIP_DIRS = {"venv", ".venv", "__pycache__", ".git", "node_modules", ".ii-structure", ".pytest_cache"}
