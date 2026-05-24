@@ -1,6 +1,8 @@
+import concurrent.futures
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import sqlite3
 from dataclasses import asdict
@@ -117,6 +119,22 @@ def _node_to_symbol(node: dict) -> dict:
     }
 
 
+_MAX_PARSE_WORKERS = min(os.cpu_count() or 4, 8)
+
+
+def _parse_file_worker(args: tuple) -> tuple[str, object, str] | None:
+    """Parse a single file in a worker process. Returns (rel, ParseResult, content_hash) or None."""
+    rel, source_file_str, content = args
+    try:
+        backend = get_backend(source_file_str)
+        result = backend.parse_file(rel, content)
+        fhash = _content_hash(content)
+        return (rel, result, fhash)
+    except Exception as exc:
+        logger.warning("Parse failed for %s: %s", rel, exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # _process_file — parse a single file and store results in the graph
 # ---------------------------------------------------------------------------
@@ -174,14 +192,33 @@ class Index:
         graph = GraphStore(str(db_path))
 
         gitignore_spec = _load_gitignore(root)
-        for source_file in _walk_source_files(root, gitignore_spec):
+        source_files = _walk_source_files(root, gitignore_spec)
+
+        # Read all files and prepare work items
+        work_items = []
+        for source_file in source_files:
             rel = str(source_file.relative_to(root))
             try:
                 content = source_file.read_text(encoding="utf-8", errors="replace")
             except (FileNotFoundError, PermissionError) as exc:
                 logger.warning("Skipping %s: %s", rel, exc)
                 continue
-            _process_file(rel, content, source_file, graph)
+            work_items.append((rel, str(source_file), content))
+
+        # Parse in parallel, store sequentially
+        if len(work_items) > 10:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=_MAX_PARSE_WORKERS) as pool:
+                parse_results = list(pool.map(_parse_file_worker, work_items))
+        else:
+            parse_results = [_parse_file_worker(item) for item in work_items]
+
+        for parsed in parse_results:
+            if parsed is None:
+                continue
+            rel, result, fhash = parsed
+            graph.store_file_nodes_edges(rel, result.symbols, result.edges, fhash)
+            imports_json = json.dumps([asdict(i) for i in result.imports])
+            graph.upsert_file_aux(rel, imports_json, result.error, fhash)
 
         graph.resolve_bare_call_targets()
         graph.rebuild_fts_index()
@@ -229,6 +266,8 @@ class Index:
         existing_files = set(self.graph.get_all_files())
         existing_files.update(self.graph.get_all_file_aux_paths())
 
+        # Collect files that need re-parsing
+        work_items = []
         for source_file in _walk_source_files(root, gitignore_spec):
             rel = str(source_file.relative_to(root))
             current_files.add(rel)
@@ -244,7 +283,22 @@ class Index:
             if aux and aux["content_hash"] == actual_hash:
                 continue
 
-            _process_file(rel, content, source_file, graph=self.graph)
+            work_items.append((rel, str(source_file), content))
+
+        # Parse changed files in parallel, store sequentially
+        if len(work_items) > 10:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=_MAX_PARSE_WORKERS) as pool:
+                parse_results = list(pool.map(_parse_file_worker, work_items))
+        else:
+            parse_results = [_parse_file_worker(item) for item in work_items]
+
+        for parsed in parse_results:
+            if parsed is None:
+                continue
+            rel, result, fhash = parsed
+            self.graph.store_file_nodes_edges(rel, result.symbols, result.edges, fhash)
+            imports_json = json.dumps([asdict(i) for i in result.imports])
+            self.graph.upsert_file_aux(rel, imports_json, result.error, fhash)
 
         for old_file in existing_files - current_files:
             self.graph.remove_file_data(old_file)
@@ -349,8 +403,40 @@ def _walk_source_files(
     root: pathlib.Path,
     gitignore_spec: pathspec.PathSpec | None,
 ) -> list[pathlib.Path]:
-    files = []
+    import subprocess
+
     extensions = supported_extensions()
+
+    # Try git ls-files first (faster, respects .gitignore natively)
+    if (root / ".git").exists():
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "--cached", "--exclude-standard"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                files = []
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    path = root / line
+                    if path.suffix not in extensions:
+                        continue
+                    parts = pathlib.PurePosixPath(line).parts
+                    if any(part in SKIP_DIRS for part in parts):
+                        continue
+                    if path.is_file():
+                        files.append(path)
+                return sorted(files)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            logger.warning("git ls-files failed, falling back to rglob: %s", exc)
+
+    # Fallback: walk filesystem
+    files = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
