@@ -41,7 +41,8 @@ def test_extracts_imported_call():
     result = parse_file("app.py", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "validate" in targets
+    # After import resolution, should include module info
+    assert any("utils" in t for t in targets)
 
 
 def test_extracts_import_edges():
@@ -369,8 +370,8 @@ def test_python_method_call_same_class_qualified():
     assert "models.py::User.save" in targets
 
 
-def test_python_cross_file_call_stays_bare():
-    """Call to a function NOT defined in this file stays bare."""
+def test_python_cross_file_call_qualified_via_import():
+    """Call to a function imported from another module should include module info."""
     source = textwrap.dedent("""\
         from utils import validate
         def process():
@@ -379,8 +380,35 @@ def test_python_cross_file_call_stays_bare():
     result = parse_file("app.py", source)
     call_edges = [e for e in result.edges if e.kind == "CALLS"]
     targets = {e.target for e in call_edges}
-    assert "validate" in targets
+    assert any("utils" in t for t in targets)
     assert "app.py::validate" not in targets
+
+
+def test_python_imported_call_qualified_via_import():
+    """Call to an imported function should include module info."""
+    source = textwrap.dedent("""\
+        from utils import validate
+        def process():
+            validate()
+    """)
+    result = parse_file("app.py", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    # Should reference the module, not bare "validate"
+    assert any("utils" in t for t in targets)
+
+
+def test_python_aliased_import_resolved():
+    """Import with alias should resolve correctly."""
+    source = textwrap.dedent("""\
+        from models import User as U
+        def process():
+            U()
+    """)
+    result = parse_file("app.py", source)
+    call_edges = [e for e in result.edges if e.kind == "CALLS"]
+    targets = {e.target for e in call_edges}
+    assert any("models" in t for t in targets)
 
 
 def test_go_same_file_call_qualified():
