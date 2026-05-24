@@ -1,3 +1,4 @@
+import subprocess
 import time
 from ii_structure.index import Index
 
@@ -142,8 +143,6 @@ def test_search_symbols_by_name_path(simple_project):
     assert results[0]["name"] == "save"
     assert results[0]["parent"] == "User"
 
-
-import subprocess
 
 
 def test_git_ls_files_used_in_git_repo(tmp_path):
